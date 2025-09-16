@@ -15,7 +15,30 @@ import pandas as pd
 import copy
 import os
 
+
+# -----------------------------------------------------------------------------
+# Training script for a causal (decoder-only) Transformer used as an ICL estimator.
+# The model consumes a window of continuous tokens u_{1:T} (e.g. [ia, ib, va, vb, ω̂_{k-1}])
+# and predicts the full sequence ŷ_{1:T} (e.g. speed). During training/inference we do
+# closed-loop recursion: at time t we feed the *previous prediction* ω̂_{t-1} into channel 4.
+#
+# Math (autoregressive recursion):
+#   ŷ_t = f_ϕ(u_{1:t}, ŷ_{1:t-1})  with  ŷ_0 ≜ 0
+# Loss: MSE( y_{1:T}, ŷ_{1:T} )
+#
+# References: ICL state estimators (Busetto et al. IFAC'24), BLDC speed ICL (Colombo et al. 2025).
+#
+# Notes:
+# - Data windows come normalized from dataset.py.
+# - Channel index 4 (last_omega) is overwritten step-by-step with predictions.
+# - This is *not* teacher forcing: the loop uses its own predictions → evaluates robustness.
+# -----------------------------------------------------------------------------
+
+
 ### quick param selection
+# Quick knobs for experimentation. Consider mirroring these into argparse defaults
+# to have a single source of truth (prevents mismatches between CLI and here).
+
 
 checkpoint_name_to_save = "test"
 checkpoint_name_to_open = "test"
@@ -53,6 +76,11 @@ folder_vaildation = ["simulated/50_percent_low_speed"]
 folder_path_val = [os.path.join(data_path, folder) for folder in folder_vaildation]
 
 if alternative_batch_extractor:
+# Dataset contract:
+#  - __getitem__ returns (batch_u, batch_y) where
+#      batch_u: (B,H,5) with channel 4 reserved for ω̂_{t-1} injection at train/val time
+#      batch_y: (B,H,1) ground-truth speed ω_t
+#  - load_dataframes_from_folder aggregates per-experiment CSV/Parquet files
     from dataset_alt import Dataset, load_dataframes_from_folder
 else:
     from dataset import Dataset, load_dataframes_from_folder
@@ -73,12 +101,23 @@ if wandb_record:
         project="in-context bldc estimator",
         name=checkpoint_name_to_save
     )
+    # We log only scalars (train/val loss). Avoid logging full batches to keep runs light.
+
 
 
 def train(model, dataloader, criterion, optimizer, device):
     '''
     Trains the model over the given data batches. Along the windows of length h, the model estimates recursively the output omega_hat_t, with t = 1...h.
     At each iteration the model receives as input the previous estimated outputs, which is initialized at 0 e.g. omega_hat_3 = f(..., [0, omega_hat_1, omega_hat_2]). Performs back-propagation to update the model weights. Returns the training loss, as the mse between the recursively obtained output estimations, and the real outputs inside the window.
+    One epoch of autoregressive training over windows of length H.
+    At step t we form input_{1:t} by injecting the last prediction:
+        ω̂_0 := 0
+        for t = 1..H:
+            u_step = u.copy(); u_step[:, t, 4] = ω̂_{t-1}
+            ŷ_t = model(u_step[:, :t+1, :])[:, -1, 0]
+    We collect ŷ_{1:H}, compute MSE(y_{1:H}, ŷ_{1:H}), backprop, and update.
+    Shapes:
+      batch_u: (B,H,5)  batch_y: (B,H,1)  batch_y_pred: (B,H,1)
     '''
     torch.autograd.set_detect_anomaly(True)
     model.train()
@@ -95,11 +134,16 @@ def train(model, dataloader, criterion, optimizer, device):
         batch_u_copy[:,:,4] = 0  
 
         # Store predictions
+        # Initialize ω̂_0 = 0 for all sequences in the batch
+        # Requires grad=True so gradients can flow through the unrolled recursion.
         last_predictions = torch.zeros(batch_u_copy.shape[0], device=device, requires_grad=True) # batch_u_copy.shape[0] is the batch size
         batch_y_pred_list = []  # list to accumulate outputs
 
         # Simulate step by step
         for t in range(batch_u_copy.shape[1]):
+            # Inject previous estimate into the 5th channel at current step t
+            # u_step[:, :t+1, :] provides a strictly-causal prefix to the Transformer
+            # ŷ_t is obtained by taking the last time position of the model output
             batch_u_step = batch_u_copy.clone()  # Clone to avoid modification issues
             batch_u_step[:, t, 4] = last_predictions  # Inject last predictions
             batch_u_tmp = batch_u_step[:, :t+1, :]  # Take relevant time slice
@@ -111,6 +155,8 @@ def train(model, dataloader, criterion, optimizer, device):
 
         # Concatenate all predictions along time dimension
         batch_y_pred = torch.cat(batch_y_pred_list, dim=1).unsqueeze(-1)  # Ensure shape matches batch_y
+        # batch_y_pred: concatenated per-step predictions ŷ_{1:H} with shape (B,H,1)
+        # Criterion compares full sequences (teacher-free schedule because we feed our own ŷ).
 
         # Compute loss
         loss = criterion(batch_y, batch_y_pred)
@@ -122,6 +168,9 @@ def train(model, dataloader, criterion, optimizer, device):
         running_loss += loss.item()
 
         # Debugging: Check if all parameters have gradients
+        # If some parameters have no grads, common culprits:
+        #  - using .detach() inadvertently on inputs
+        #  - not using last token output ([:, -1, :]) in the forward recurrence
         for name, param in model.named_parameters():
             if param.grad is None:
                 print(f"Warning: No gradient computed for {name}")
@@ -134,7 +183,12 @@ def validate(model, dataloader, criterion, device):
     '''
     Evaluates the model over the given data batches. Along the windows of length h, the model estimates recursively the output omega_hat_t, with t = 1...h.
     At each iteration the model receives as input the previous estimated outputs, which is initialized at 0 e.g. omega_hat_3 = f(..., [0, omega_hat_1, omega_hat_2]). Returns the validation loss, as the mse between the recursively obtained output estimations, and the real outputs inside the window.
+    Autoregressive rollout without gradient:
+      ω̂_0 := 0, then for t=1..H inject ω̂_{t-1}, read ŷ_t = model(... )[:, -1, 0].
+    Returns mean MSE over validation batches.
+    Note: identical schedule to training (no teacher forcing), so val is faithful to inference.
     '''
+
     model.eval()
     running_loss = 0.0
     with torch.no_grad():
@@ -439,3 +493,10 @@ if __name__ == '__main__':
     }
 
     torch.save(checkpoint, model_dir / f"{cfg.out_file}_loss_check.pt")
+
+
+# GOTCHA: Keep seq_len (H) ≤ model.block_size; else positional embedding lookup will fail.
+# GOTCHA: batch_u_copy[:, :, 4] is assumed to be the ω̂ channel; keep dataset channel order consistent.
+# GOTCHA: last_predictions must keep requires_grad=True in training; do not detach it.
+# GOTCHA: If validation loss >> train loss, check normalization consistency and that val uses the same autoregressive schedule.
+# GOTCHA: Warmup too long can freeze LR near 0; ensure warmup_iters ≪ max_iters.

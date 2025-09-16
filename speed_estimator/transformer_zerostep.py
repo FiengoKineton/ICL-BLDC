@@ -12,6 +12,18 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 
+# -----------------------------------------------------------------------------
+# Zero-step Transformer for dynamical sequences (ICL-style estimator).
+# Input:  batch_u ∈ ℝ^{B×T×n_u}  (continuous tokens per time step, e.g. [vα,vβ,iα,iβ, ω̂_{k-1}])
+# Output: batch_y_pred ∈ ℝ^{B×T×n_y} (per-step predictions, e.g. ω̂_{1:T}); at inference usually take x[:, -1, :].
+# Causality: strictly causal self-attention (no peeking ahead).
+# Math (per head): α_{tj} = softmax((q_t k_j^T)/√d_h) for j ≤ t; y_t = Σ_j α_{tj} v_j.
+# Related works:
+#  - ICL state estimators: Busetto et al. (IFAC 2024); speed ICL on BLDC: Colombo et al. (2025)
+#  - Decoder-only control/estimation with context windows: "One controller to rule them all" (2025)
+# -----------------------------------------------------------------------------
+
+
 # @torch.jit.script # good to enable when not using torch.compile, disable when using (our default)
 #def new_gelu(x):
 #    """
@@ -22,7 +34,11 @@ from torch.nn import functional as F
 
 
 class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
+    """LayerNorm with optional bias (to mimic GPT-2 behavior). PyTorch doesn't support simply bias=False
+    Args:
+        ndim: embedding width d
+        bias: if False, drop β parameter; PyTorch's LN doesn't expose this flag natively.
+    """
 
     def __init__(self, ndim, bias):
         super().__init__()
@@ -57,6 +73,12 @@ class CausalSelfAttention(nn.Module):
                                  .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x):
+        # x: (B,T,d). Project to q,k,v then split heads -> (B,h,T,d_h)
+        # Attention math (per head):
+        # att = softmax((Q K^T) / sqrt(d_h)) with future positions masked
+        # y = att @ V  -> (B,h,T,d_h), then concat heads -> (B,T,d)
+        # Dropout applied on att (attn_dropout) and residual output (resid_dropout).
+
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -85,6 +107,10 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
+    """Position-wise feed-forward network:
+       x -> Linear(d,4d) -> GELU -> Linear(4d,d) -> Dropout.
+       This is the non-linear mixing after attention in each Transformer block.
+    """
 
     def __init__(self, config):
         super().__init__()
@@ -103,6 +129,11 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
+    """Transformer decoder block (Pre-LN, residual):
+       x = x + Attn(LN(x))
+       x = x + MLP(LN(x))
+       Pre-normalization eases optimization in deep stacks.
+    """
 
     def __init__(self, config):
         super().__init__()
@@ -119,6 +150,14 @@ class Block(nn.Module):
 
 @dataclass
 class GPTConfig:
+    # block_size: max sequence length T (also size of positional embedding table)
+    # n_layer:   number of decoder blocks
+    # n_head:    number of attention heads
+    # n_embd:    embedding/hidden width d
+    # n_x/n_u/n_y: dims for states/inputs/outputs (here we use n_u at input, n_y at output)
+    # dropout:   dropout prob for attention + MLP residuals
+    # bias:      include bias in Linear/LayerNorm (GPT-2 style if True)
+
     block_size: int = 1024
     n_layer: int = 12
     n_head: int = 12
@@ -179,6 +218,17 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, batch_u):
+        # batch_u: (B,T,n_u). T must be ≤ block_size (positional table length).
+        # pos: (1,T) integer indices -> positional embeddings P ∈ ℝ^{T×d}
+        # Tokenization for continuous streams:
+        #   E_t = W_e u_t  (Linear), X_t = E_t + P_t
+        #   H   = Transformer(X)  (causal; each H_t sees X_≤t only)
+        # Output head:
+        #   Y = lm_head(H) ∈ ℝ^{B×T×n_y}
+        # In training: you can supervise all steps (seq2seq regression)
+        # In inference: usually take the last step prediction:
+        #   y_T = Y[:, -1, :]   # uncomment if you need only current-step output
+
         device = batch_u.device
         b, t, nu = batch_u.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -198,6 +248,11 @@ class GPT(nn.Module):
         # Select the last element of the sequence
         # x = x[:, -1, :]  # shape (b, n_embd)
         batch_y_pred = x
+
+        # NOTE: if you always want only the last time-step prediction, replace:
+        #   batch_y_pred = x
+        # with:
+        #   batch_y_pred = x[:, -1, :].unsqueeze(1)  # keep time dim if needed
 
         return batch_y_pred
 
@@ -236,6 +291,12 @@ class GPT(nn.Module):
 
 
 def warmup_cosine_lr(iter, lr, min_lr, warmup_iters, lr_decay_iters):
+    # LR schedule:
+    # 1) Warmup: lr * (iter / warmup_iters), for iter < warmup_iters
+    # 2) Cosine decay from lr → min_lr over [warmup_iters, lr_decay_iters]
+    #    lr(iter) = min_lr + 0.5*(lr - min_lr)*(1 + cos(pi * progress))
+    # 3) Clamp to min_lr after lr_decay_iters
+
     # 1) linear warmup for warmup_iters steps
     if iter < warmup_iters:
         return lr * iter / warmup_iters
@@ -247,3 +308,14 @@ def warmup_cosine_lr(iter, lr, min_lr, warmup_iters, lr_decay_iters):
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
     return min_lr + coeff * (lr - min_lr)
+
+
+
+# GOTCHA: If T > config.block_size you’ll crash on wpe lookup; either increase block_size
+#          or chunk your context window.
+
+# GOTCHA: Flash attention path assumes PyTorch ≥ 2.0. Fallback mask allocates (block_size×block_size);
+#          keep block_size reasonable on small GPUs.
+
+# GOTCHA (inference): By default the model returns per-step outputs (B,T,n_y).
+#          If your downstream loop expects only the current estimate, select x[:, -1, :].

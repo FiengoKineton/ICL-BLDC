@@ -7,12 +7,43 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 import copy
 
+# -----------------------------------------------------------------------------
+# Dataset for ICL-style BLDC speed estimation.
+# Contract:
+#   __getitem__ -> (batch_u, batch_y)
+#     batch_u: (H, 5) = [ia, ib, va, vb, last_omega]  (normalized)
+#     batch_y: (H, 1) = omega                        (normalized)
+# Windowing:
+#   - Random experiment, random start index.
+#   - 50% probability to sample a "step" window (r changes inside H) vs "constant" window.
+# Autoregression helper:
+#   - 'last_omega' is a placeholder copy of ω_{t-1}; training/validation overwrite it with model predictions.
+# Normalization: fixed ranges -> map raw signals to ~[0,1] magnitudes.
+# -----------------------------------------------------------------------------
+
+
 class Dataset(Dataset):
+    """Sequence dataset for autoregressive estimation.
+    Args:
+        dfs: list[pd.DataFrame] each with columns at least
+             ['t','theta','omega','r','ia','ib','iq_ref','va','vb'] (or remapped)
+        seq_len: window length H
+    Returns (__getitem__):
+        batch_u: torch.float32 (H,5)  -> [ia, ib, va, vb, last_omega]
+        batch_y: torch.float32 (H,1)  -> omega
+    Notes:
+        - Values are normalized by normalize_fixed_ranges().
+        - 'last_omega' is shifted ω (ω_{t-1}); at training we overwrite it with predictions ω̂_{t-1}.
+        - Channel order is fixed; training code assumes index 4 is the ω̂ channel.
+    """
+
     def __init__(self, dfs, seq_len):
         self.dfs = dfs
         self.seq_len = seq_len
 
     def __len__(self):
+        # Upper bound on samples per epoch (virtual length).
+        # Keeps each epoch lightweight regardless of how many CSVs are loaded.
         # maximum set of samples considered at each iteration
         return 512
 
@@ -45,6 +76,9 @@ class Dataset(Dataset):
 
 
         # Get the sequence for batch_u and batch_y
+        # batch_y: (H,1) target speeds (normalized)
+        # batch_u: (H,5) inputs  [ia, ib, va, vb, last_omega] (normalized)
+        # NOTE: channel 4 MUST remain reserved to ω̂ during training/validation.
         batch_y = torch.tensor(df['omega'].iloc[start_idx:start_idx + self.seq_len].values, dtype=torch.float32)
         batch_u = torch.tensor(df[['ia', 'ib', 'va', 'vb', 'last_omega']].iloc[start_idx:start_idx + self.seq_len].values,
                                dtype=torch.float32)
@@ -55,9 +89,13 @@ class Dataset(Dataset):
         return batch_u, batch_y
 
     def get_full_experiment(self, idx):
-        '''
+        """Return entire normalized experiment as tensors.
+        Shapes:
+          batch_u: (T,5), batch_y: (T,1)
+        Includes 'last_omega' = shifted ω (ω_{t-1}); at inference you can ignore/overwrite it.
+
         Outputs the entirety of the experiment at index idx as a torch tensor (normalized if the data files were passed to the Dataset object correctly)
-        '''
+        """
         df = self.dfs[idx]
         tmp = copy.deepcopy(df['omega'].to_numpy())
         tmp[1:-1] = tmp[0:-2]
@@ -95,6 +133,15 @@ class Dataset(Dataset):
 def normalize_fixed_ranges(df):
     '''
     Transforms the relevant column of the dataframe so that their valuse is in the range [0,1], or at least in its order of magnitude
+    Normalize raw signals to fixed ranges (~[0,1]).
+    Mapping:
+      ia, ib:  [-5, +5]   -> (x+5)/10
+      va, vb:  [-24,+24]  -> (x+24)/48
+      omega:   [0, 2500]  -> x/2500
+    WARNING:
+      - Assumes currents and voltages stay within these physical bounds.
+      - If your data exceed these ranges, values may go <0 or >1; either clip or adapt the constants.
+      - Keep this mapping in sync with reverse_normalization().
     '''
     df['ia'] = (df['ia'] + 5) / 10  # Normalize iq from -5 to 5 -> [0, 1]
     df['ib'] = (df['ib'] + 5) / 10  # Normalize id from -5 to 5 -> [0, 1]
@@ -107,6 +154,15 @@ def normalize_fixed_ranges(df):
 def reverse_normalization(batch_u, batch_y, batch_y_pred):
     '''
     Transforms the batch values into their orignal values, inverting the transfotrmation of "normalized_fixed_ranges()"
+    Invert normalize_fixed_ranges() for visualization/evaluation on raw units.
+    Args:
+      batch_u: (B,H,5), batch_y: (B,H,1), batch_y_pred: (B,H,1)
+    Returns:
+      (batch_u_denorm, batch_y_denorm, batch_y_pred_denorm)
+    Notes:
+      - Expects the same channel order: [ia, ib, va, vb, last_omega].
+      - Keep constants consistent with normalize_fixed_ranges().
+      - Make sure tensors are cloned if you need original normalized values later.
     '''
     # Define the normalization constants
     min_currents = -5
@@ -136,6 +192,17 @@ def reverse_normalization(batch_u, batch_y, batch_y_pred):
 def load_dataframes_from_folder(folder_path):
     '''
     Genertes a list of dataframes corresponding to all csv files in the given folder "folder_path".
+    
+    Load and normalize all CSVs in folder_path.
+    Steps:
+      - Read CSV
+      - Map columns to ['t','theta','omega','r','ia','ib','iq_ref','va','vb'] if possible
+      - Apply normalize_fixed_ranges()
+    Returns:
+      list[pd.DataFrame] normalized
+    GOTCHA:
+      - If CSV columns differ, extend the mapping or handle exceptions explicitly.
+      - Ensure units match the assumed ranges before normalization.
     '''
     # Create a list to hold all DataFrames
     dataframes = []
@@ -228,3 +295,11 @@ if __name__ == "__main__":
 
 
     plt.show()
+
+
+# GOTCHA: Channel order is hard-coded: [ia, ib, va, vb, last_omega]; training assumes index 4 is ω̂.
+# GOTCHA: If your currents/voltages exceed the assumed ranges, update normalize_fixed_ranges() (and reverse).
+# GOTCHA: __len__ returns 512 (virtual length). If you need epoch-size proportional to data, change it.
+# GOTCHA: Sampling balance (prob_ratio) affects curriculum: 0.5 enforces 50/50 step vs constant windows.
+# GOTCHA: Copy-on-write: modifying df in-place (df['last_omega'] = ...) will persist across calls if dfs are reused.
+#         If you want immutability, work on a df copy inside __getitem__.

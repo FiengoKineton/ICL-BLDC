@@ -73,3 +73,10 @@ If you find this project useful, we encourage you to cite the [paper](https://ar
   year={2025}
 }
 ```
+
+# Look at:
+- speed_estimator/transformer_zerostep.py - architettura Transformer (decoder-only) per stima @k dal contesto. 
+- speed_estimator/train_zerostep.py - training loop; costruisce il batch, gestisce l'autoregressione (ri- . iniezione di @k-1 come 5° canale), loss, scheduler. 
+- speed_estimator/dataset.py - normalizzazioni e finestre temporali (contesto lungo H); prepara (u, y) per il modello.
+- speed_estimator/torch_utils.py - utility (device/GPU, ecc.). 
+- speed_estimator/deprecated/KalmanFilter.py - baseline (E)KF per confronto con ICL (richiamo allo stato dell'arte).

@@ -16,6 +16,23 @@ import copy
 import os
 
 ### quick param selection
+"""
+# --- EXPERIMENT TAGS / I/O ---
+# checkpoint_name_to_save controls the filename prefix and the W&B run name.
+# mode:
+#   "scratch"   → new model from cfg
+#   "resume"    → load state dict + optimizer + losses and continue training
+#   "pretrained"→ load weights only, keep new optimizer/lr schedule.
+#
+# sequence_length (H) is the causal context length used by the Transformer.
+# It MUST be ≤ GPTConfig.block_size and equals the window length extracted by Dataset.
+#
+# NOTE (dataset choice):
+# - dataset.py  → uniform random windows (no stratification).
+# - dataset_alt.py → "alternative batch extractor": draws windows with constraints
+#   (e.g., include at least one sample above 2000 rpm). This is *important* to keep
+#   a balanced curriculum across speed bands and avoid low-rpm bias."""
+
 
 checkpoint_name_to_save = "noise_h10"
 checkpoint_name_to_open = "noise_h10"
@@ -39,6 +56,14 @@ learning_rate_value = 1e-5
 alternative_batch_extractor = True
 
 # whether or not to log training data on wandb
+"""
+# Set wandb_record=False to avoid logging when prototyping. When True, each run is
+# tagged by checkpoint_name_to_save; metrics you want to see there: loss, val_loss,
+# current lr, and optionally banded NRMSE (0–300/300–800/800–2500 rpm).
+#
+# data_path is built assuming the repo is named "in-context-bldc".
+# If you move folders around, prefer Path(...).resolve() to avoid fragile splits."""
+
 wandb_record = True
 
 current_path = os.getcwd().split("in-context-bldc")[0]
@@ -56,6 +81,14 @@ folder_vaildation = ["simulated/50_percent_control_with_noise/validation", "simu
 folder_path_val = [os.path.join(data_path, folder) for folder in folder_vaildation]
 
 if alternative_batch_extractor:
+    """
+    # Both Datasets must return:
+    #   batch_u: float32 tensor [B, H, n_u]  (normalized inputs)
+    #   batch_y: float32 tensor [B, H, 1]    (normalized targets, ω)
+    # IMPORTANT: If you rely on "teacher forcing" of ω_{t-1}, the Dataset should fill
+    # the 'last_omega' channel with *ground-truth* ω_{t-1}. If you want robustness
+    # to deployment (autoregressive), see the scheduled sampling snippet below.
+    """
     from dataset_alt import Dataset, load_dataframes_from_folder
 else:
     from dataset import Dataset, load_dataframes_from_folder
@@ -163,6 +196,15 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 def train(model, dataloader, criterion, optimizer, device):
+    """
+    One-step/parallel training:
+      - Expects batch_u=[B,H,n_u], batch_y=[B,H,1].
+      - The model outputs [B,H,1] in parallel (no inner loop), i.e. we DO NOT
+        overwrite the 'last_omega' channel with the model's own prediction during
+        training (pure teacher forcing if the Dataset fills last_omega with truth).
+      - Pros: faster, stable gradients. Cons: train/test mismatch if at inference
+        you feed back ω̂_{t-1}. Mitigation: scheduled sampling (see below).
+    """
     torch.autograd.set_detect_anomaly(True)
     model.train()
     running_loss = 0.0
@@ -172,11 +214,16 @@ def train(model, dataloader, criterion, optimizer, device):
 
         optimizer.zero_grad()
 
+        """# Forward pass: model returns ω̂ over the whole window in one shot
+        # (causal attention ensures x[:,t] never sees future tokens)."""
         batch_y_pred = model(batch_u)
 
+        """# MSE between normalized ω and ω̂. If you later add uncertainty (μ, logσ²),
+        # replace this with a Gaussian NLL."""
         loss = criterion(batch_y[:, :, 0], batch_y_pred[:, :, 0])
 
         loss.backward()
+        ### torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # ← safe clip
         optimizer.step()
 
         running_loss += loss.item()
@@ -186,12 +233,49 @@ def train(model, dataloader, criterion, optimizer, device):
         #         print(f"Parameter Value: {param}")
         for name, param in model.named_parameters():
             if param.grad is None:
+                # Debug: check missing gradients (usually means the parameter is detached or unused).
                 print(f"No gradient computed for {name}")
 
     return running_loss / len(dataloader)
 
 
+def train_autoreg(model, dataloader, criterion, optimizer, device, p_sched=0.3):
+    """
+    Scheduled-sampling autoregressive train:
+    at each t, with prob p_sched feed model's ω̂_{t-1}, else feed ground-truth ω_{t-1}.
+    This shrinks train→test mismatch and stabilizes branch selection beyond aliasing.
+    """
+    model.train(); total=0.0
+    for batch_u, batch_y in dataloader:
+        batch_u = batch_u.to(device); batch_y = batch_y.to(device)
+        optimizer.zero_grad()
+        # start from a copy with zeroed feedback
+        bu = batch_u.clone(); bu[:,:,4] = 0.0   # 5th channel = last_omega
+        preds = []
+        last = torch.zeros(bu.size(0), device=device)
+        for t in range(bu.size(1)):
+            feed = bu.clone()
+            feed[:, t, 4] = last
+            out = model(feed)[:, t, 0]  # predict ω̂_t
+            preds.append(out)
+            # scheduled sampling
+            gt = batch_y[:, t, 0]
+            use_model = (torch.rand_like(gt) < p_sched).float()
+            last = use_model * out.detach() + (1 - use_model) * gt
+        yhat = torch.stack(preds, dim=1)  # [B,H]
+        loss = criterion(batch_y[:,:,0], yhat)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        total += loss.item()
+    return total/len(dataloader)
+
+
 def validate(model, dataloader, criterion, device):
+    """
+    Validation mirrors training mode: if you trained autoregressively, validate the same way.
+    Otherwise do the fast parallel pass to monitor MSE. Keep shapes: [B,H,1].
+    """
     model.eval()
     running_loss = 0.0
     with torch.no_grad():
@@ -204,12 +288,27 @@ def validate(model, dataloader, criterion, device):
             loss = criterion(batch_y[:, :, 0], batch_y_pred[:, :, 0])
             running_loss += loss.item()
 
+    """
+    # --- OPTIONAL: band-wise metrics (requires denormalized rpm or a mask from Dataset) ---
+    # try:
+    #     # Suppose dataloader yields (batch_u, batch_y, rpm_denorm)
+    #     # and you collected yhat for the whole val set into lists yhat_list, rpm_list.
+    #     # Here only a schematic example:
+    #     pass
+    # except Exception:
+    #     pass"""
     return running_loss / len(dataloader)
 
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Meta system identification with transformers')
+    """
+    # nx/nu/ny are *not* state-space orders; here they are dimensionalities:
+    #   n_u = number of input channels (e.g., ia, ib, va, vb, last_omega, ...),
+    #   n_y = outputs (1: ω),
+    #   n_x is unused in the GPT but kept for compatibility with other models.
+    # seq-len = window H used as the Transformer context (also set as block_size)."""
 
     # Overall
     parser.add_argument('--model-dir', type=str, default="out", metavar='S',
@@ -314,10 +413,31 @@ if __name__ == '__main__':
     device = torch.device(device_name)
     device_type = 'cuda' if 'cuda' in device_name else 'cpu' # for later use in torch.autocast
     torch.set_float32_matmul_precision("high")
+
+    """# Device selection. Avoid calling CUDA APIs when running on CPU.
+    if device_type == 'cuda':
+        torch.cuda.set_device(device)
+        torch.set_float32_matmul_precision("high")  # tf32 for speed on Ampere+
+    else:
+        print("Running on CPU. Consider enabling CUDA for speed.")"""
     torch.cuda.set_device(device)
     print(torch.cuda.is_available())
     print(torch.cuda.current_device())
 
+    """
+    # ---------------------------------------------------------------------------
+    # DATA EXPECTATIONS (folders → CSVs)
+    # Each folder must contain CSV files with columns:
+    #   t, theta, omega, r, ia, ib, iq_ref, va, vb
+    # The Dataset will:
+    #   - normalize physical ranges (i, v, ω),
+    #   - build sliding windows of length H=cfg.seq_len,
+    #   - stack inputs as [ia, ib, va, vb, last_omega, ...] → n_u channels,
+    #   - set targets to ω (1 channel).
+    # NOTE: If you rely on a feedback channel 'last_omega', the Dataset should
+    # fill it with ground-truth ω_{t-1} (teacher forcing). If you later switch to
+    # scheduled sampling, you’ll overwrite this channel inside train().
+    # ---------------------------------------------------------------------------"""
     # Load all your DataFrames (replace with your data loading code)
     # folder_path = '../data/CL_experiments/train/inertia13_ki-0.0061-kp-11.8427'
     dfs = []
@@ -327,6 +447,13 @@ if __name__ == '__main__':
         print(f"Loaded {len(new_dfs)} DataFrames from {path_iter}.")
 
     train_ds = Dataset(dfs=dfs, seq_len=cfg.seq_len)
+
+    """
+    # --- OPTIONAL: stratified sampling by speed bands ---
+    # from torch.utils.data import WeightedRandomSampler
+    # weights = train_ds.window_weights_by_speed([0,300,800,2500])  # implement in Dataset
+    # sampler = WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
+    # train_dl = DataLoader(train_ds, batch_size=cfg.batch_size, pin_memory=True, sampler=sampler)"""
     train_dl = DataLoader(train_ds, batch_size=cfg.batch_size, pin_memory=True, shuffle=True)
 
     dfs_val = []
@@ -353,6 +480,8 @@ if __name__ == '__main__':
     if alternative_batch_extractor:
         print("using alternative batch extractor")
     
+    """# Print the full config so checkpoints are reproducible. Consider removing the input()
+    # when running unattended (or guard it under a flag)."""
     input("everything ok?")
 
     
@@ -434,6 +563,8 @@ if __name__ == '__main__':
 
     best_epoch = iter_num -1
     for epoch in range(iter_num+1, cfg.max_iters):
+        patience = 5000  # iterations without improvement (tune this)
+        no_improve = 0
 
         #########################################
         # aggiungi qua una stringa da mette nel file di check per savere il best model ogni 10k tipo iterazioni (e.g. checkpoint_stocazzo_***10k***.pt)
@@ -442,6 +573,8 @@ if __name__ == '__main__':
 
         current_block = (epoch // (frequency * 1000) + 1) * frequency
 
+        """# Save "best so far" as <name>_10k.pt, <name>_20k.pt, ... for long runs,
+        # so you can backtrack to earlier minima if you overfit later."""
         name_suffix = '_' + str(current_block) + 'k'
 
         checkpoint_name_to_save_file = checkpoint_name_to_save + name_suffix
@@ -481,6 +614,13 @@ if __name__ == '__main__':
             }
 
             torch.save(checkpoint, model_dir / f"{checkpoint_name_to_save_file}.pt")
+            no_improve = 0
+        else:
+            no_improve += 1
+        # --- EARLY STOP (optional) ---
+        # if no_improve >= patience:
+        #     print(f"Early stopping at iter {epoch} (patience={patience})")
+        #     break
 
         
         print("model: ", checkpoint_name_to_save)
@@ -504,4 +644,7 @@ if __name__ == '__main__':
                 'cfg': cfg,
     }
 
+    """# Save the "last" checkpoint (even if not best) to inspect loss curves.
+    # For production use, load the best_k.pt; for research, sometimes the final model has
+    # interesting generalization on specific bands even if val MSE is worse globally."""
     torch.save(checkpoint, model_dir / f"{cfg.out_file}_loss_check.pt")

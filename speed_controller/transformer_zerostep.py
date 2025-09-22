@@ -1,6 +1,13 @@
 """
 Implementation of the Transformer models for dynamical systems. Derived from Karpathy's nanoGPT
 https://github.com/karpathy/nanoGPT/
+
+# This is a *decoder-only* Transformer for continuous time-series.
+# Inputs:   batch_u ∈ R^{B×T×n_u} (e.g., ia, ib, va, vb, last_omega, ...)
+# Output:   batch_y_hat ∈ R^{B×T×n_y} (here n_y=1 for ω)
+# Causality: implemented via FlashAttention's is_causal=True or a triangular mask.
+# Positional encoding: learned absolute embeddings (wpe). For dynamics, ROTARY
+# embeddings (RoPE) or ALiBi often work better; see "Improvements" below.
 """
 
 import math
@@ -38,6 +45,10 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
+        """# Projections produce Q,K,V with shape (B,T,3⋅d_model) then reshaped to (B, n_head, T, d_head).
+        # FlashAttention path uses fused kernels when available (PyTorch≥2.0), else we fall back
+        # to a masked softmax implementation with an explicit causal lower-tri mask."""
+
         # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         # output projection
@@ -60,11 +71,18 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        # x: [B,T,C]; split along the channel dimension to get q,k,v each [B,T,C].
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
 
+        """
+        # --- OPTIONAL RoPE hook ---
+        # # apply_rotary(q, k)  # if you implement rotary embeddings
+        # --- OPTIONAL ALiBi hook ---
+        # # att_bias = build_alibi_bias(T, self.n_head, x.device)  # shape [1,nh,T,T]
+        # # when not using flash, add: att = att + att_bias"""
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
@@ -85,6 +103,8 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
+    """Position-wise feed-forward: d_model → 4⋅d_model → d_model with GELU.
+    Dropout uses config.dropout. No bias removal here (cf. transformer biases debate)."""
 
     def __init__(self, config):
         super().__init__()
@@ -103,6 +123,8 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
+    """# Pre-norm residual block: x ← x + Attn(LN(x)); then x ← x + MLP(LN(x)).
+    # Pre-norm is more stable for deep stacks than post-norm."""
 
     def __init__(self, config):
         super().__init__()
@@ -119,6 +141,13 @@ class Block(nn.Module):
 
 @dataclass
 class GPTConfig:
+    """
+    block_size: max sequence length T (must be ≥ H used at train/infer)
+    n_layer, n_head, n_embd: transformer depth, heads, model width
+    n_u: input channels; n_y: outputs; n_x: kept for compatibility (unused here)
+    dropout: applied in attn/MLP/residual
+    bias: include bias in Linear and LayerNorm
+    """
     block_size: int = 1024
     n_layer: int = 12
     n_head: int = 12
@@ -140,13 +169,31 @@ class GPT(nn.Module):
         self.transformer = nn.ModuleDict(dict(
             wte=nn.Linear(config.n_u, config.n_embd),  # we process continuous data
             #wte=nn.Embedding(config.vocab_size, config.n_embd),
+            # wte: linear "token" embed for continuous inputs (no vocabulary).
             wpe=nn.Embedding(config.block_size, config.n_embd),
+            # wpe = absolute learned positions. For better frequency handling or long-context:
+            # - RoPE (rotary): replace absolute wpe with rotary mixing of q,k (see Su et al. 2021).
+            # - ALiBi: add linear bias by distance directly in attention scores.
+            # These require changes inside CausalSelfAttention.forward (on q,k for RoPE; on att for ALiBi).
             drop=nn.Dropout(config.dropout),
             h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f=LayerNorm(config.n_embd, bias=config.bias),
         ))
+
+        # lm_head: linear readout to n_y outputs per time-step (sequence-to-sequence).
+        # If you need uncertainty: set n_y=2 and output (μ, logσ²) → use NLL loss.
         self.lm_head = nn.Linear(config.n_embd, config.n_y, bias=True) # False
         #self.lm_head = nn.Linear(config.n_embd, config.n_y, bias=False) # False
+        
+        """
+        # --- OPTIONAL: Uncertainty head for risk-aware inference ---
+        # self.lm_head_mu = nn.Linear(config.n_embd, 1, bias=True)
+        # self.lm_head_lv = nn.Linear(config.n_embd, 1, bias=True)  # log-variance
+
+        # --- OPTIONAL: PID-head (control extension) ---
+        # A small structured head that enforces integral action can be placed here if you
+        # output control increments and accumulate them externally. Keep this file
+        # estimator-only unless you’re ready to add a control loop/loss."""
 
         # init all weights
         self.apply(self._init_weights)
@@ -179,6 +226,12 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, batch_u):
+        """
+        Args:
+          batch_u: [B, T, n_u], normalized.
+        Returns:
+          [B, T, n_y] predictions (causal: each t sees ≤ t).
+        """
         device = batch_u.device
         b, t, nu = batch_u.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -186,6 +239,9 @@ class GPT(nn.Module):
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(batch_u)  # token embeddings of shape (b, t, n_embd)
+        
+        # Position indices [0..T-1]; if you use variable-length windows, you can offset
+        # them or apply RoPE to avoid absolute-position overfitting.
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (1, t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
         for block in self.transformer.h:
@@ -199,6 +255,14 @@ class GPT(nn.Module):
         # x = x[:, -1, :]  # shape (b, n_embd)
         batch_y_pred = x
 
+        """
+        # We return the whole sequence so the trainer can compute loss over all t.
+        # For sequence-to-one, pick x[:,-1,:].
+
+        # --- OPTIONAL: return (mu, logvar) instead of single output ---
+        # mu = self.lm_head(x)
+        # lv = self.lm_head_lv(x)
+        # return torch.cat([mu, lv], dim=-1)"""
         return batch_y_pred
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
@@ -238,6 +302,14 @@ class GPT(nn.Module):
 
 
 class GPT_chopped(nn.Module):
+    """
+    Minimal embedder: returns token+pos embeddings without attention/MLP/head.
+    Useful for diagnostics or to feed a custom head (e.g., a PID head).
+    NOT a predictor by itself.
+
+    # NOTE: this module only returns token + position embeddings (no attention/MLP/head).
+    # Use for diagnostics or as a building block; it cannot predict ω on its own.
+    """
 
     def __init__(self, config):
         super().__init__()
@@ -330,6 +402,8 @@ class GPT_chopped(nn.Module):
         return optimizer
 
 def warmup_cosine_lr(iter, lr, min_lr, warmup_iters, lr_decay_iters):
+    # Scalar LR scheduler with linear warmup then cosine decay; call it per iteration.
+
     # 1) linear warmup for warmup_iters steps
     if iter < warmup_iters:
         return lr * iter / warmup_iters

@@ -1,0 +1,16 @@
+{"time":"2025-09-23T14:41:02.7429551+02:00","level":"INFO","msg":"stream: starting","core version":"0.22.0"}
+{"time":"2025-09-23T14:41:08.5443988+02:00","level":"INFO","msg":"stream: created new stream","id":"k1o0fmbq"}
+{"time":"2025-09-23T14:41:08.5443988+02:00","level":"INFO","msg":"handler: started","stream_id":"k1o0fmbq"}
+{"time":"2025-09-23T14:41:08.5443988+02:00","level":"INFO","msg":"stream: started","id":"k1o0fmbq"}
+{"time":"2025-09-23T14:41:08.5443988+02:00","level":"INFO","msg":"writer: started","stream_id":"k1o0fmbq"}
+{"time":"2025-09-23T14:41:08.5449278+02:00","level":"INFO","msg":"sender: started","stream_id":"k1o0fmbq"}
+{"time":"2025-09-23T14:41:08.7051505+02:00","level":"ERROR","msg":"HTTP error","status":403,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-09-23T14:41:08.7056537+02:00","level":"ERROR","msg":"runupserter: failed to init run","error":"returned error 403: {\"data\":{\"upsertBucket\":null},\"errors\":[{\"message\":\"permission denied\",\"path\":[\"upsertBucket\"],\"extensions\":{\"code\":\"PERMISSION_ERROR\"}}]}"}
+{"time":"2025-09-23T14:41:08.7143754+02:00","level":"INFO","msg":"stream: closing","id":"k1o0fmbq"}
+{"time":"2025-09-23T14:41:08.7158849+02:00","level":"ERROR","msg":"sender: uploadConfigFile: stream: no run"}
+{"time":"2025-09-23T14:41:08.9243437+02:00","level":"ERROR","msg":"HTTP error","status":404,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-09-23T14:41:08.9256588+02:00","level":"ERROR","msg":"runfiles: CreateRunFiles returned error: returned error 404: {\"data\":{\"createRunFiles\":null},\"errors\":[{\"message\":\"project g7-fiengo/in-context bldc controller v2 not found during createRunFiles\",\"path\":[\"createRunFiles\"]}]}"}
+{"time":"2025-09-23T14:41:08.926208+02:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-09-23T14:41:08.926208+02:00","level":"INFO","msg":"handler: closed","stream_id":"k1o0fmbq"}
+{"time":"2025-09-23T14:41:08.926208+02:00","level":"INFO","msg":"sender: closed","stream_id":"k1o0fmbq"}
+{"time":"2025-09-23T14:41:08.926208+02:00","level":"INFO","msg":"stream: closed","id":"k1o0fmbq"}

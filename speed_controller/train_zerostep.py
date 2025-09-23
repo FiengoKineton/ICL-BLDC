@@ -64,10 +64,10 @@ alternative_batch_extractor = True
 # data_path is built assuming the repo is named "in-context-bldc".
 # If you move folders around, prefer Path(...).resolve() to avoid fragile splits."""
 
-wandb_record = True
+wandb_record = False
 
-current_path = os.getcwd().split("in-context-bldc")[0]
-data_path = os.path.join(current_path,"in-context-bldc", "data")
+current_path = os.getcwd().split("ICL-BLDC")[0]
+data_path = os.path.join(current_path,"ICL-BLDC", "data")
 
 
 # multiple folders can be selected
@@ -486,12 +486,18 @@ if __name__ == '__main__':
 
     
     if wandb_record:
-        # start a new wandb run to track this script
-        wandb.init(
-            # set the wandb project where this run will be logged
-            project="in-context bldc controller v2",
-            name=checkpoint_name_to_save
+        os.environ["WANDB_ENTITY"]  = "g7-fiengo"
+        os.environ["WANDB_PROJECT"] = "in-context-bldc"
+        os.environ.pop("WANDB_BASE_URL", None)  # assicura cloud standard
+
+        run = wandb.init(
+            entity="g7-fiengo",
+            project="in-context-bldc",
+            name=checkpoint_name_to_save,
+            reinit=True,
+            mode="online",
         )
+        print("W&B -> entity:", run.entity, "| project:", run.project)
 
     # Model
     model_args = dict(n_layer=cfg.n_layer, n_head=cfg.n_head, n_embd=cfg.n_embd, n_x=cfg.nx, n_y=cfg.ny, n_u=cfg.nu, block_size=cfg.block_size,

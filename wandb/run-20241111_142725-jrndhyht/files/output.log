@@ -1,5 +1,0 @@
-2024-11-11_14:27:26
-Traceback (most recent call last):
-  File "c:\Users\39340\Documents\GitHub\in-context-bldc\speed_estimator\bldc_simulator_CL_Ome.py", line 19, in <module>
-    input()
-KeyboardInterrupt

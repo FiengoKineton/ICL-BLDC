@@ -1,0 +1,15 @@
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_setup.py:_flush():81] Current SDK version is 0.22.0
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_setup.py:_flush():81] Configure stats pid to 27160
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_setup.py:_flush():81] Loading settings from C:\Users\g7fie\.config\wandb\settings
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_setup.py:_flush():81] Loading settings from C:\Users\g7fie\OneDrive\Documenti\GitHub\ICL-BLDC\wandb\settings
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_init.py:setup_run_log_directory():686] Logging user logs to C:\Users\g7fie\OneDrive\Documenti\GitHub\ICL-BLDC\wandb\run-20250923_144058-k1o0fmbq\logs\debug.log
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_init.py:setup_run_log_directory():687] Logging internal logs to C:\Users\g7fie\OneDrive\Documenti\GitHub\ICL-BLDC\wandb\run-20250923_144058-k1o0fmbq\logs\debug-internal.log
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_init.py:init():813] calling init triggers
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_init.py:init():818] wandb.init called with sweep_config: {}
+config: {'_wandb': {}}
+2025-09-23 14:40:58,194 INFO    MainThread:27160 [wandb_init.py:init():861] starting backend
+2025-09-23 14:41:02,669 INFO    MainThread:27160 [wandb_init.py:init():864] sending inform_init request
+2025-09-23 14:41:02,739 INFO    MainThread:27160 [wandb_init.py:init():872] backend started and connected
+2025-09-23 14:41:02,740 INFO    MainThread:27160 [wandb_init.py:init():942] updated telemetry
+2025-09-23 14:41:02,782 INFO    MainThread:27160 [wandb_init.py:init():966] communicating run to backend with 90.0 second timeout

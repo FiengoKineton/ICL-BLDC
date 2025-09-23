@@ -1,9 +1,0 @@
-C:/CL_speed/experiment_2024-11-11_14:46:33_0.csv
-Traceback (most recent call last):
-  File "c:\Users\39340\Documents\GitHub\in-context-bldc\speed_estimator\bldc_simulator_CL_Ome.py", line 132, in <module>
-    # plt.show()
-    ^^^^^^
-  File "c:\Users\39340\Documents\GitHub\in-context-bldc\speed_estimator\bldc_simulator_CL_Ome.py", line 95, in main
-    obj_path = os.path.join(data_path, '/CL_speed/experiment_' + date_time_str + '_' + str(experiment) + '.csv')
-              ^^^^^^^^^^^^
-NameError: name 'obj_pathpath' is not defined

@@ -98,13 +98,13 @@ This appendix explains **why CUDA matters**, how to **verify your setup**, what 
 
 ## Create once (in repo root)
 
-```powershell
+~~~powershell
 # Ensure Python is on PATH
 python --version
 
 # Create .venv folder in the current directory
 python -m venv .venv
-
+~~~
 
 ---
 

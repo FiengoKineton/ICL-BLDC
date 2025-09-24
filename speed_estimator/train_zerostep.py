@@ -219,15 +219,30 @@ def validate(model, dataloader, criterion, device):
     return running_loss / len(dataloader)
 
 
-if __name__ == '__main__':
-
+def make_parser(
+    *,
+    checkpoint_name_to_save,
+    checkpoint_name_to_open,
+    mode,
+    sequence_length,
+    layers_number,
+    heads_number,
+    embd_number,
+    batch_size_,
+    max_iteration_number,
+    learning_rate_value,
+):
+    """
+    Build an argparse.ArgumentParser for the training script.
+    Mirrors the options in the 'NEW FILE' snippet.
+    """
     parser = argparse.ArgumentParser(description='Meta system identification with transformers')
 
-    # Overall
+    # --- Overall ---
     parser.add_argument('--model-dir', type=str, default="out", metavar='S',
                         help='Saved model folder')
     parser.add_argument('--out-file', type=str, default=checkpoint_name_to_save, metavar='S',
-                        help='Saved model name')
+                        help='Saved model name (filename stem)')
     parser.add_argument('--in-file', type=str, default=checkpoint_name_to_open, metavar='S',
                         help='Loaded model name (when resuming)')
     parser.add_argument('--init-from', type=str, default=mode, metavar='S',
@@ -235,65 +250,87 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42, metavar='N',
                         help='Seed for random number generation')
     parser.add_argument('--log-wandb', action='store_true', default=False,
-                        help='disables CUDA training')
+                        help='Log training to Weights & Biases')
 
-    # Dataset
+    # --- Dataset ---
     parser.add_argument('--nx', type=int, default=4, metavar='N',
-                        help='model order (default: 5)')
+                        help='state dimension proxy (not SS order)')
     parser.add_argument('--nu', type=int, default=5, metavar='N',
-                        help='model order (default: 5)')
+                        help='number of input channels')
     parser.add_argument('--ny', type=int, default=1, metavar='N',
-                        help='model order (default: 5)')
+                        help='number of output channels')
     parser.add_argument('--seq-len', type=int, default=sequence_length, metavar='N',
-                        help='sequence length (default: 600)')
-    parser.add_argument('--mag_range', type=tuple, default=(0.5, 0.97), metavar='N',
-                        help='sequence length (default: 600)')
-    parser.add_argument('--phase_range', type=tuple, default=(0.0, math.pi/2), metavar='N',
-                        help='sequence length (default: 600)')
+                        help='sequence length H (must be ≤ block_size)')
+    parser.add_argument('--mag_range', type=tuple, default=(0.5, 0.97), metavar='TUP',
+                        help='magnitude range (tuple)')
+    parser.add_argument('--phase_range', type=tuple, default=(0.0, math.pi/2), metavar='TUP',
+                        help='phase range (tuple)')
     parser.add_argument('--fixed-system', action='store_true', default=False,
-                        help='If True, keep the same model all the times')
+                        help='If True, keep the same plant/system across epochs')
 
-    # Model
+    # --- Model ---
     parser.add_argument('--n-layer', type=int, default=layers_number, metavar='N',
-                        help='number of iterations (default: 1M)')
+                        help='number of Transformer blocks (depth)')
     parser.add_argument('--n-head', type=int, default=heads_number, metavar='N',
-                        help='number of iterations (default: 1M)')
+                        help='number of attention heads')
     parser.add_argument('--n-embd', type=int, default=embd_number, metavar='N',
-                        help='number of iterations (default: 1M)')
-    parser.add_argument('--dropout', type=float, default=0, metavar='LR',
-                        help='learning rate (default: 1e-4)')
+                        help='model width (embedding dim)')
+    parser.add_argument('--dropout', type=float, default=0.0, metavar='P',
+                        help='dropout rate (0–0.2 typical)')
     parser.add_argument('--bias', action='store_true', default=False,
-                        help='bias in model')
+                        help='use bias in Linear/LayerNorm')
 
-    # Training
+    # --- Training ---
     parser.add_argument('--batch-size', type=int, default=batch_size_, metavar='N',
-                        help='batch size (default:32)')
-    parser.add_argument('--max-iters', type=int, default= max_iteration_number, metavar='N',
-                        help='number of iterations (default: 1M)')
+                        help='batch size')
+    parser.add_argument('--max-iters', type=int, default=max_iteration_number, metavar='N',
+                        help='number of training epochs/iterations')
     parser.add_argument('--warmup-iters', type=int, default=5_000, metavar='N',
-                        help='number of iterations (default: 1000)')
+                        help='LR warmup steps/iters')
     parser.add_argument('--lr', type=float, default=learning_rate_value, metavar='LR',
-                        help='learning rate (default: 1e-4)')
-    parser.add_argument('--weight-decay', type=float, default=0.0, metavar='D',
-                        help='weight decay (default: 1e-4)')
+                        help='learning rate')
+    parser.add_argument('--weight-decay', type=float, default=0.0, metavar='WD',
+                        help='weight decay (AdamW)')
     parser.add_argument('--eval-interval', type=int, default=10, metavar='N',
-                        help='batch size (default:32)')
+                        help='evaluate every N iters')
     parser.add_argument('--eval-iters', type=int, default=10, metavar='N',
-                        help='batch size (default:32)')
+                        help='batches per evaluation')
     parser.add_argument('--fixed-lr', action='store_true', default=False,
-                        help='disables CUDA training')
+                        help='disable LR scheduling (use fixed lr)')
 
-    # Compute
+    # --- Compute ---
     parser.add_argument('--threads', type=int, default=16,
-                        help='number of CPU threads (default: 10)')
+                        help='number of CPU dataloader/BLAS threads')
     parser.add_argument('--no-cuda', action='store_true', default=False,
-                        help='disables CUDA training')
+                        help='force CPU (disable CUDA)')
     parser.add_argument('--cuda-device', type=str, default="cuda:0", metavar='S',
-                        help='cuda device (default: "cuda")')
+                        help='CUDA device, e.g. "cuda:0"')
     parser.add_argument('--compile', action='store_true', default=False,
-                        help='disables CUDA training')
+                        help='enable torch.compile for speed')
 
+    return parser
+
+
+# Example usage from another script
+if __name__ == '__main__':
+    # These symbols must exist in your script/environment:
+    # checkpoint_name_to_save, checkpoint_name_to_open, mode,
+    # sequence_length, layers_number, heads_number, embd_number,
+    # batch_size_, max_iteration_number, learning_rate_value
+    parser = make_parser(
+        checkpoint_name_to_save=checkpoint_name_to_save,
+        checkpoint_name_to_open=checkpoint_name_to_open,
+        mode=mode,
+        sequence_length=sequence_length,
+        layers_number=layers_number,
+        heads_number=heads_number,
+        embd_number=embd_number,
+        batch_size_=batch_size_,
+        max_iteration_number=max_iteration_number,
+        learning_rate_value=learning_rate_value,
+    )
     cfg = parser.parse_args()
+    # ... training code using cfg ...
 
     # Other settings
     cfg.beta1 = 0.9

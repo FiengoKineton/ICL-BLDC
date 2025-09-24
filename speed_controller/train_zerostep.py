@@ -14,6 +14,8 @@ import torch.nn as nn
 import pandas as pd
 import copy
 import os
+import sys
+
 
 ### quick param selection
 """
@@ -67,7 +69,7 @@ alternative_batch_extractor = True
 wandb_record = False
 
 current_path = os.getcwd().split("ICL-BLDC")[0]
-data_path = os.path.join(current_path,"ICL-BLDC", "data")
+data_path = os.path.join(current_path,"ICL-BLDC")
 
 
 # multiple folders can be selected
@@ -300,15 +302,20 @@ def validate(model, dataloader, criterion, device):
     return running_loss / len(dataloader)
 
 
-if __name__ == '__main__':
-
+def make_parser(
+    *,
+    checkpoint_name_to_save,
+    checkpoint_name_to_open,
+    mode,
+    sequence_length,
+    layers_number,
+    heads_number,
+    embd_number,
+    batch_size_,
+    max_iteration_number,
+    learning_rate_value,
+):
     parser = argparse.ArgumentParser(description='Meta system identification with transformers')
-    """
-    # nx/nu/ny are *not* state-space orders; here they are dimensionalities:
-    #   n_u = number of input channels (e.g., ia, ib, va, vb, last_omega, ...),
-    #   n_y = outputs (1: ω),
-    #   n_x is unused in the GPT but kept for compatibility with other models.
-    # seq-len = window H used as the Transformer context (also set as block_size)."""
 
     # Overall
     parser.add_argument('--model-dir', type=str, default="out", metavar='S',
@@ -322,64 +329,80 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42, metavar='N',
                         help='Seed for random number generation')
     parser.add_argument('--log-wandb', action='store_true', default=False,
-                        help='disables CUDA training')
+                        help='log to Weights & Biases')
 
     # Dataset
     parser.add_argument('--nx', type=int, default=4, metavar='N',
-                        help='model order (default: 5)')
+                        help='model order (default: 4)')
     parser.add_argument('--nu', type=int, default=6, metavar='N',
-                        help='model order (default: 5)')
+                        help='model order (default: 6)')
     parser.add_argument('--ny', type=int, default=1, metavar='N',
-                        help='model order (default: 5)')
+                        help='model order (default: 1)')
     parser.add_argument('--seq-len', type=int, default=sequence_length, metavar='N',
                         help='sequence length (default: 600)')
     parser.add_argument('--mag_range', type=tuple, default=(0.5, 0.97), metavar='N',
-                        help='sequence length (default: 600)')
+                        help='magnitude range (tuple default)')
     parser.add_argument('--phase_range', type=tuple, default=(0.0, math.pi/2), metavar='N',
-                        help='sequence length (default: 600)')
+                        help='phase range (tuple default)')
     parser.add_argument('--fixed-system', action='store_true', default=False,
                         help='If True, keep the same model all the times')
 
     # Model
     parser.add_argument('--n-layer', type=int, default=layers_number, metavar='N',
-                        help='number of iterations (default: 1M)')
+                        help='number of transformer layers')
     parser.add_argument('--n-head', type=int, default=heads_number, metavar='N',
-                        help='number of iterations (default: 1M)')
+                        help='number of attention heads')
     parser.add_argument('--n-embd', type=int, default=embd_number, metavar='N',
-                        help='number of iterations (default: 1M)')
-    parser.add_argument('--dropout', type=float, default=0, metavar='LR',
-                        help='learning rate (default: 1e-4)')
+                        help='embedding size')
+    parser.add_argument('--dropout', type=float, default=0.0, metavar='LR',
+                        help='dropout rate')
     parser.add_argument('--bias', action='store_true', default=False,
-                        help='bias in model')
+                        help='use bias in model')
 
     # Training
     parser.add_argument('--batch-size', type=int, default=batch_size_, metavar='N',
-                        help='batch size (default:32)')
-    parser.add_argument('--max-iters', type=int, default= max_iteration_number, metavar='N',
-                        help='number of iterations (default: 1M)')
+                        help='batch size (default: 32)')
+    parser.add_argument('--max-iters', type=int, default=max_iteration_number, metavar='N',
+                        help='number of iterations')
     parser.add_argument('--warmup-iters', type=int, default=5_000, metavar='N',
-                        help='number of iterations (default: 1000)')
+                        help='warmup iterations')
     parser.add_argument('--lr', type=float, default=learning_rate_value, metavar='LR',
-                        help='learning rate (default: 1e-4)')
+                        help='learning rate')
     parser.add_argument('--weight-decay', type=float, default=0.0, metavar='D',
-                        help='weight decay (default: 1e-4)')
+                        help='weight decay')
     parser.add_argument('--eval-interval', type=int, default=10, metavar='N',
-                        help='batch size (default:32)')
+                        help='eval interval (iters)')
     parser.add_argument('--eval-iters', type=int, default=10, metavar='N',
-                        help='batch size (default:32)')
+                        help='eval iters per eval step')
     parser.add_argument('--fixed-lr', action='store_true', default=False,
-                        help='disables CUDA training')
+                        help='disable LR scheduling')
 
     # Compute
     parser.add_argument('--threads', type=int, default=16,
-                        help='number of CPU threads (default: 10)')
+                        help='number of CPU threads')
     parser.add_argument('--no-cuda', action='store_true', default=False,
-                        help='disables CUDA training')
+                        help='disable CUDA')
     parser.add_argument('--cuda-device', type=str, default="cuda:0", metavar='S',
-                        help='cuda device (default: "cuda")')
+                        help='cuda device (e.g., "cuda:0")')
     parser.add_argument('--compile', action='store_true', default=False,
-                        help='disables CUDA training')
+                        help='torch.compile the model')
 
+    return parser
+
+
+if __name__ == '__main__':
+    parser = make_parser(
+        checkpoint_name_to_save=checkpoint_name_to_save,
+        checkpoint_name_to_open=checkpoint_name_to_open,
+        mode=mode,
+        sequence_length=sequence_length,
+        layers_number=layers_number,
+        heads_number=heads_number,
+        embd_number=embd_number,
+        batch_size_=batch_size_,
+        max_iteration_number=max_iteration_number,
+        learning_rate_value=learning_rate_value,
+    )
     cfg = parser.parse_args()
 
     # Other settings
@@ -412,6 +435,7 @@ if __name__ == '__main__':
     device_name = cuda_device if use_cuda else "cpu"
     device = torch.device(device_name)
     device_type = 'cuda' if 'cuda' in device_name else 'cpu' # for later use in torch.autocast
+    print("device_type: ", device_type, "\n\n\n")
     torch.set_float32_matmul_precision("high")
 
     """# Device selection. Avoid calling CUDA APIs when running on CPU.
@@ -569,7 +593,7 @@ if __name__ == '__main__':
 
     best_epoch = iter_num -1
     for epoch in range(iter_num+1, cfg.max_iters):
-        patience = 5000  # iterations without improvement (tune this)
+        patience = 500  # iterations without improvement (tune this)
         no_improve = 0
 
         #########################################
@@ -624,13 +648,14 @@ if __name__ == '__main__':
         else:
             no_improve += 1
         # --- EARLY STOP (optional) ---
-        # if no_improve >= patience:
-        #     print(f"Early stopping at iter {epoch} (patience={patience})")
-        #     break
+        if no_improve >= patience:
+            print(f"Early stopping at iter {epoch} (patience={patience})")
+            break
 
-        
-        print("model: ", checkpoint_name_to_save)
-        print(f"Epoch [{epoch}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}, best val loss was: {best_val_loss:.4f}")
+        digits = len(str(cfg.max_iters))
+        print("-----\n",
+            "model: ", checkpoint_name_to_save, "\tno_improve: ", no_improve, "/", patience)
+        print(f"Epoch [{epoch:>{digits}}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}, best_val_loss: {best_val_loss:.4f}")
         if wandb_record:
             wandb.log({"epoch": epoch, "loss": train_loss, "val_loss": val_loss, "best_epoch": best_epoch})
 

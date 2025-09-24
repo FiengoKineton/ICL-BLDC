@@ -104,6 +104,16 @@ python --version
 
 # Create .venv folder in the current directory
 python -m venv .venv
+
+# Activate for each new shell session:
+.\.venv\Scripts\Activate.ps1
+
+# Install project deps inside the venv:
+python -m pip install -U pip
+pip install -r requirements.txt
+
+# Deactivate when done:
+deactivate
 ~~~
 
 ---

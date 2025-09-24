@@ -69,7 +69,7 @@ alternative_batch_extractor = True
 wandb_record = False
 
 current_path = os.getcwd().split("ICL-BLDC")[0]
-data_path = os.path.join(current_path,"ICL-BLDC")
+data_path = os.path.join(current_path,"ICL-BLDC", "data")
 
 
 # multiple folders can be selected
@@ -106,6 +106,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 
+"""
 # def train(model, dataloader, criterion, optimizer, device):
 #     '''
 #     Trains the model over the given data batches. Along the windows of length h, the model estimates recursively the output omega_hat_t, with t = 1...h.
@@ -197,6 +198,41 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 #     return running_loss / len(dataloader)
 
 
+def train_autoreg(model, dataloader, criterion, optimizer, device, p_sched=0.3):
+    '''
+    Scheduled-sampling autoregressive train:
+    at each t, with prob p_sched feed model's ω̂_{t-1}, else feed ground-truth ω_{t-1}.
+    This shrinks train→test mismatch and stabilizes branch selection beyond aliasing.
+    '''
+    model.train(); total=0.0
+    for batch_u, batch_y in dataloader:
+        batch_u = batch_u.to(device); batch_y = batch_y.to(device)
+        optimizer.zero_grad()
+        # start from a copy with zeroed feedback
+        bu = batch_u.clone(); bu[:,:,4] = 0.0   # 5th channel = last_omega
+        preds = []
+        last = torch.zeros(bu.size(0), device=device)
+        for t in range(bu.size(1)):
+            feed = bu.clone()
+            feed[:, t, 4] = last
+            out = model(feed)[:, t, 0]  # predict ω̂_t
+            preds.append(out)
+            # scheduled sampling
+            gt = batch_y[:, t, 0]
+            use_model = (torch.rand_like(gt) < p_sched).float()
+            last = use_model * out.detach() + (1 - use_model) * gt
+        yhat = torch.stack(preds, dim=1)  # [B,H]
+        loss = criterion(batch_y[:,:,0], yhat)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        total += loss.item()
+    return total/len(dataloader)
+
+
+# """
+
+
 def train(model, dataloader, criterion, optimizer, device):
     """
     One-step/parallel training:
@@ -239,38 +275,6 @@ def train(model, dataloader, criterion, optimizer, device):
                 print(f"No gradient computed for {name}")
 
     return running_loss / len(dataloader)
-
-
-def train_autoreg(model, dataloader, criterion, optimizer, device, p_sched=0.3):
-    """
-    Scheduled-sampling autoregressive train:
-    at each t, with prob p_sched feed model's ω̂_{t-1}, else feed ground-truth ω_{t-1}.
-    This shrinks train→test mismatch and stabilizes branch selection beyond aliasing.
-    """
-    model.train(); total=0.0
-    for batch_u, batch_y in dataloader:
-        batch_u = batch_u.to(device); batch_y = batch_y.to(device)
-        optimizer.zero_grad()
-        # start from a copy with zeroed feedback
-        bu = batch_u.clone(); bu[:,:,4] = 0.0   # 5th channel = last_omega
-        preds = []
-        last = torch.zeros(bu.size(0), device=device)
-        for t in range(bu.size(1)):
-            feed = bu.clone()
-            feed[:, t, 4] = last
-            out = model(feed)[:, t, 0]  # predict ω̂_t
-            preds.append(out)
-            # scheduled sampling
-            gt = batch_y[:, t, 0]
-            use_model = (torch.rand_like(gt) < p_sched).float()
-            last = use_model * out.detach() + (1 - use_model) * gt
-        yhat = torch.stack(preds, dim=1)  # [B,H]
-        loss = criterion(batch_y[:,:,0], yhat)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
-        total += loss.item()
-    return total/len(dataloader)
 
 
 def validate(model, dataloader, criterion, device):
@@ -592,9 +596,11 @@ if __name__ == '__main__':
     time_start = time.time()
 
     best_epoch = iter_num -1
+    patience = 200  # iterations without improvement (tune this)
+    no_improve = 0
+    tol = 0.001
+
     for epoch in range(iter_num+1, cfg.max_iters):
-        patience = 500  # iterations without improvement (tune this)
-        no_improve = 0
 
         #########################################
         # aggiungi qua una stringa da mette nel file di check per savere il best model ogni 10k tipo iterazioni (e.g. checkpoint_stocazzo_***10k***.pt)
@@ -644,7 +650,11 @@ if __name__ == '__main__':
             }
 
             torch.save(checkpoint, model_dir / f"{checkpoint_name_to_save_file}.pt")
-            no_improve = 0
+            
+            if val_loss < best_val_loss - tol:
+                no_improve = 0
+            else: 
+                no_improve += 1
         else:
             no_improve += 1
         # --- EARLY STOP (optional) ---
@@ -655,7 +665,7 @@ if __name__ == '__main__':
         digits = len(str(cfg.max_iters))
         print("-----\n",
             "model: ", checkpoint_name_to_save, "\tno_improve: ", no_improve, "/", patience)
-        print(f"Epoch [{epoch:>{digits}}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}, best_val_loss: {best_val_loss:.4f}")
+        print(f"Epoch [{epoch:>{digits}}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}, best_val_loss: {best_val_loss:.4f}")
         if wandb_record:
             wandb.log({"epoch": epoch, "loss": train_loss, "val_loss": val_loss, "best_epoch": best_epoch})
 
@@ -679,3 +689,35 @@ if __name__ == '__main__':
     # For production use, load the best_k.pt; for research, sometimes the final model has
     # interesting generalization on specific bands even if val MSE is worse globally."""
     torch.save(checkpoint, model_dir / f"{cfg.out_file}_loss_check.pt")
+
+"""
+LR, GRAD_NORM, PARAM_NORM, EPOCH_TIME = [], [], [], []
+
+for epoch in range(cfg.max_iters):
+    t0 = time.time()
+
+    # ... training step ...
+
+    # learning rate from optimizer (first param group, or average if many)
+    LR.append(optimizer.param_groups[0]['lr'])
+
+    # gradient and parameter norms (L2)
+    total_g2, total_p2 = 0.0, 0.0
+    for p in model.parameters():
+        if p.grad is not None:
+            total_g2 += float(p.grad.detach().float().pow(2).sum().cpu())
+        total_p2 += float(p.detach().float().pow(2).sum().cpu())
+    GRAD_NORM.append(math.sqrt(total_g2) if total_g2 > 0 else 0.0)
+    PARAM_NORM.append(math.sqrt(total_p2))
+
+    EPOCH_TIME.append(time.time() - t0)
+
+# When building the checkpoint dict:
+checkpoint.update({
+    'LR': LR,
+    'GRAD_NORM': GRAD_NORM,
+    'PARAM_NORM': PARAM_NORM,
+    'EPOCH_TIME': EPOCH_TIME,
+})
+
+"""

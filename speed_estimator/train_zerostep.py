@@ -64,8 +64,8 @@ alternative_batch_extractor = False
 # whether or not to log training data on wandb
 wandb_record = False
 
-current_path = os.getcwd().split("in-context-bldc")[0]
-data_path = os.path.join(current_path,"in-context-bldc", "data")
+current_path = os.getcwd().split("ICL-BLDC")[0]
+data_path = os.path.join(current_path,"ICL-BLDC", "data")
 
 
 # multiple folders can be selected
@@ -176,7 +176,6 @@ def train(model, dataloader, criterion, optimizer, device):
                 print(f"Warning: No gradient computed for {name}")
 
     return running_loss / len(dataloader)
-
 
 
 def validate(model, dataloader, criterion, device):
@@ -326,6 +325,7 @@ if __name__ == '__main__':
     device_name = cuda_device if use_cuda else "cpu"
     device = torch.device(device_name)
     device_type = 'cuda' if 'cuda' in device_name else 'cpu' # for later use in torch.autocast
+    print("device_type: ", device_type, "\n\n\n")
     torch.set_float32_matmul_precision("high")
     torch.cuda.set_device(device)
     print(torch.cuda.is_available())
@@ -436,6 +436,10 @@ if __name__ == '__main__':
     time_start = time.time()
 
     best_epoch = iter_num -1
+    patience = 200 
+    no_improve = 0
+    tol = 0.001
+
     for epoch in range(iter_num+1, cfg.max_iters):
         ## I COMMENTED THIS PART BECAUSE THERE WAS A PROBLEM WITH LR : IT WAS STUCK TO 0
         if cfg.decay_lr:
@@ -469,10 +473,19 @@ if __name__ == '__main__':
             }
 
             torch.save(checkpoint, model_dir / f"{cfg.out_file}.pt")
+            
+            no_improve = 0 #if val_loss < best_val_loss - tol else no_improve + 1
+        else:
+            no_improve += 1
+        # --- EARLY STOP (optional) ---
+        if no_improve >= patience:
+            print(f"Early stopping at iter {epoch} (patience={patience})")
+            break
 
-        
-        print("model: ", checkpoint_name_to_save)
-        print(f"Epoch [{epoch}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}, best val loss was: {best_val_loss:.4f}")
+        digits = len(str(cfg.max_iters))
+        print("-----\n",
+            "model: ", checkpoint_name_to_save, "\tno_improve: ", no_improve, "/", patience)
+        print(f"Epoch [{epoch:>{digits}}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}, best_val_loss: {best_val_loss:.4f}")
         if wandb_record:
             wandb.log({"epoch": epoch, "loss": train_loss, "val_loss": val_loss, "best_epoch": best_epoch})
 

@@ -326,7 +326,7 @@ def maybe_plot_optional_curves(
 def main():
     p = argparse.ArgumentParser(description="Plot train/val loss curves and box plots from .pt checkpoints")
     p.add_argument("checkpoints", nargs="+", type=Path, help="Path(s) to .pt file(s)")
-    p.add_argument("-o", "--outdir", type=Path, default=Path("speed_controller\plots"), help="Output directory for figures/CSV")
+    p.add_argument("-o", "--outdir", type=Path, default=Path("speed_estimator\plots"), help="Output directory for figures/CSV")
     p.add_argument("--show", action="store_true", help="Show interactive windows")
     p.add_argument("--logy", action="store_true", help="Log scale on Y axis")
     p.add_argument("--ma", type=int, default=1, help="Moving-average window (epochs); 1 disables smoothing")
@@ -388,5 +388,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # >> python.exe .\speed_controller\plot_training.py .\out\temp.pt --show --logy
+    # >> python.exe .\speed_estimator\plot_training.py .\out\test.pt --show --logy
     main()

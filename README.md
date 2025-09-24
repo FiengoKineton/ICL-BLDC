@@ -82,13 +82,33 @@ If you find this project useful, we encourage you to cite the [paper](https://ar
 - speed_estimator/deprecated/KalmanFilter.py - baseline (E)KF per confronto con ICL (richiamo allo stato dell'arte).
 
 
-## ⚙️ CUDA, PyTorch & GPU Compatibility — Quick Guide
+# ⚙️ CUDA, PyTorch & GPU Compatibility
 
 This appendix explains **why CUDA matters**, how to **verify your setup**, what **compute capability / `sm_XXX`** means, and how to **install the right PyTorch build** for your GPU. Includes quick troubleshooting and perf tips.
 
 ---
 
-### Why CUDA matters
+# Use a virtual environment (Windows / venv)
+
+**Why it’s useful (evidence-based benefits):**
+- **Isolation:** dependencies for this project don’t leak into (or break) other projects.
+- **Reproducibility:** `requirements.txt` + a venv gives you a known, repeatable software stack.
+- **Cleaner CUDA/PyTorch installs:** prevents mixing CPU wheels and CUDA wheels from a global Python.
+- **No admin rights needed:** everything lives in the project folder.
+
+## Create once (in repo root)
+
+```powershell
+# Ensure Python is on PATH
+python --version
+
+# Create .venv folder in the current directory
+python -m venv .venv
+
+
+---
+
+## Why CUDA matters
 
 To run training/inference on the **GPU**, three layers must align:
 
@@ -102,7 +122,7 @@ What **must** match is **architecture support** (e.g., wheel includes `sm_120` k
 
 ---
 
-### Quick compatibility check
+## Quick compatibility check
 
 ~~~bash
 python - << 'PY'
@@ -127,7 +147,7 @@ If it’s in `site-packages`, you’re using a wheel (good). If it’s inside a 
 
 ---
 
-### What is `sm_XXX` (compute capability)?
+## What is `sm_XXX` (compute capability)?
 
 `sm_XXX` identifies the GPU micro-architecture:
 
@@ -145,7 +165,7 @@ Your PyTorch build must include kernels (or PTX) for your `sm_XXX`.
 
 ---
 
-### Install a compatible PyTorch (Windows / pip)
+## Install a compatible PyTorch (Windows / pip)
 
 **Recommended (nightly channel for newest GPUs):** put these at the **top** of `requirements.txt`:
 
@@ -181,7 +201,7 @@ If you prefer stability, use the latest **stable** `cu12x` that **includes your 
 
 ---
 
-### Common errors & quick fixes
+## Common errors & quick fixes
 
 - **`Torch not compiled with CUDA enabled`**  
   You installed a **CPU wheel**. Reinstall from the CUDA index (see above).
@@ -198,7 +218,7 @@ If you prefer stability, use the latest **stable** `cu12x` that **includes your 
 
 ---
 
-### Optional performance tips
+## Optional performance tips
 
 Enable fast paths near startup:
 ~~~python
@@ -234,7 +254,7 @@ loader = DataLoader(dataset,
 
 ---
 
-### Quick GPU micro-benchmark (optional)
+## Quick GPU micro-benchmark (optional)
 
 ~~~python
 import torch, time, math
@@ -265,7 +285,7 @@ for dt,name in [(torch.float32,'fp32/tf32'),(torch.float16,'fp16'),(torch.bfloat
 
 ---
 
-### FAQ
+## FAQ
 
 **Q: Why does `nvidia-smi` say CUDA 12.9 but `torch.version.cuda` say 12.6?**  
 A: `nvidia-smi` shows the **driver’s** max CUDA. `torch.version.cuda` is the **wheel’s** toolkit. They don’t need to match; the driver must be ≥ wheel’s CUDA.

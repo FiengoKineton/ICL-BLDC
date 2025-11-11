@@ -1,0 +1,19 @@
+# configs/dataset/real_bldc.yaml
+data:
+  root: "data/processed"
+  split:
+    train: ["simulated/50_percent_low_speed"]
+    val:   ["simulated/50_percent_low_speed"]
+  seq_len: 10
+  batch_size: 128
+  num_workers: 8
+  sampler: "default"
+  normalize:
+    method: "fixed_range"
+    ranges:
+      ia: [-5, 5]
+      ib: [-5, 5]
+      va: [-24, 24]
+      vb: [-24, 24]
+      omega: [0, 2500]
+  inject_last_channel: true

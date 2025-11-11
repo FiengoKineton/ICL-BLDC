@@ -1,0 +1,60 @@
+# configs/default.yaml
+seed: 1337
+device: "cuda"
+exp_name: "bldc_zerostep"
+
+data:
+  name: "bldc_csv"            # dataset registry key
+  root: "data/processed"
+  split:
+    train: ["simulated/50_percent_low_speed"]
+    val:   ["simulated/50_percent_low_speed"]
+  seq_len: 10
+  batch_size: 128
+  num_workers: 8
+  sampler: "default"          # "default" | "alt"
+  normalize:
+    method: "fixed_range"
+    ranges:
+      ia: [-5, 5]
+      ib: [-5, 5]
+      va: [-24, 24]
+      vb: [-24, 24]
+      omega: [0, 2500]
+  inject_last_channel: true   # model expects channel 4 to be prev prediction
+
+model:
+  name: "gpt_zerostep"        # model registry key
+  d_model: 16
+  n_layer: 8
+  n_head: 4
+  dropout: 0.0
+  n_u: 5
+  n_y: 1
+  block_size: 10
+  bias: false
+
+train:
+  epochs: 10000               # interpreted as "max_iters" style loop in old code
+  eval_interval: 10
+  eval_iters: 10
+  patience: 0                 # set >0 to enable early stop by callbacks (not required)
+  grad_clip: null
+  mixed_precision: "off"      # "off" | "fp16" | "bf16"
+
+optim:
+  name: "adamw"
+  lr: 1.0e-5
+  betas: [0.9, 0.95]
+  weight_decay: 0.0
+  scheduler:
+    name: "warmup_cosine"
+    warmup_steps: 5000
+    max_steps: 10000          # typically matches train.epochs if you treat as iters
+    min_lr_scale: 0.1         # final lr = lr * min_lr_scale
+
+loss:
+  components:
+    mse: { weight: 1.0 }
+    # smoothness weight is zero in baseline; enable in smoothing.yaml
+    smoothness: { weight: 0.0, diff_order: 1 }

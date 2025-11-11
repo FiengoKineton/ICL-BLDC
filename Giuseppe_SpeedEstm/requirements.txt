@@ -1,0 +1,17 @@
+# Core runtime dependencies for Speed Estimator — Zerostep Transformer
+# NOTE: Install a CUDA-specific PyTorch wheel if you need GPU acceleration.
+# For CPU-only you can keep the generic torch spec below.
+torch>=2.2.0
+numpy>=1.24
+pandas>=2.0
+scipy>=1.11
+pyyaml>=6.0
+tqdm>=4.66
+matplotlib>=3.7
+typing-extensions>=4.7
+packaging>=23.0
+rich>=13.0
+
+#einops>=0.6
+#transformers>=4.50
+#scikit-learn>=1.4

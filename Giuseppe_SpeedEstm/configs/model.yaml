@@ -1,0 +1,11 @@
+# configs/model/zerostep_small.yaml
+model:
+  name: "gpt_zerostep"
+  d_model: 16
+  n_layer: 8
+  n_head: 4
+  dropout: 0.0
+  n_u: 5
+  n_y: 1
+  block_size: 10
+  bias: false

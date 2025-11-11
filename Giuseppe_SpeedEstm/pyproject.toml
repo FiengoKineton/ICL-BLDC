@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "speed-estimator-zerostep"
+version = "0.1.0"
+description = "Modular BLDC speed estimation with a causal Transformer and rollout training."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Giuseppe", email = "giuseppe.fiengo@polimi.it" }
+]
+keywords = ["transformer", "time-series", "bldc", "estimation", "pytorch"]
+
+# Install the appropriate CUDA-enabled torch wheel manually if needed.
+dependencies = [
+  "torch>=2.2.0",
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scipy>=1.11",
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+  "matplotlib>=3.7",
+  "typing-extensions>=4.7",
+  "packaging>=23.0",
+  "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "black>=24.3.0",
+  "isort>=5.12.0",
+  "ruff>=0.5.0",
+  "mypy>=1.8.0",
+  "types-PyYAML>=6.0.12.12",
+  "pre-commit>=3.6.0",
+]
+
+[project.urls]
+Homepage = "https://example.com"
+Repository = "https://example.com/repo"
+
+[tool.hatch.build.targets.wheel]
+# Include everything under src/ as packages. Ensure your Python packages live under src/.
+packages = ["src"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310","py311","py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["speed_estimator_zerostep"]
+src_paths = ["src", "tests"]
+
+[tool.ruff]
+line-length = 100
+select = ["E","F","I","UP","B"]
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[project.scripts]
+speed-train = "scripts.train:main"
+speed-eval = "scripts.evaluate:main"
+speed-plot = "scripts.plot_runs:main"

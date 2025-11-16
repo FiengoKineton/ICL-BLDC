@@ -262,4 +262,4 @@ pytest -q
 
 ## License
 
-MIT (or your choice). See `LICENSE`.
+MIT.

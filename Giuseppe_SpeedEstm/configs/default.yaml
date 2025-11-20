@@ -2,6 +2,7 @@
 seed: 1337
 device: "cuda"
 exp_name: "bldc_zerostep"
+show_print: True
 
 data:
   name: "bldc_csv"            # dataset registry key

@@ -20,3 +20,4 @@ optim:
     warmup_steps: 5000
     max_steps: 10000
     min_lr_scale: 0.1
+show_print: True

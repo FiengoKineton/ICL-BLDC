@@ -13,8 +13,11 @@ import wandb
 import torch.nn as nn
 import pandas as pd
 import copy
-import os
+import os, sys
+import itertools
 
+
+SWEEP_MODE = True
 
 # -----------------------------------------------------------------------------
 # Training script for a causal (decoder-only) Transformer used as an ICL estimator.
@@ -54,6 +57,19 @@ embd_number = 16 #16
 batch_size_ = 128
 max_iteration_number = 10_000
 learning_rate_value = 1e-5
+
+
+sweep = {
+    "n_layer":    [4, 8],                # was "layers"
+    "n_head":     [2, 4],                # was "heads"
+    "n_embd":     [16, 32],              # was "embd"
+    "lr":         [1e-4, 5e-5, 1e-5],
+    "patience":   [20],
+    "max_iters":  [500],
+    "batch_size": [64, 128],
+    # optionally also:
+    # "seq_len":   [10, 20],
+}
 
 
 # standard batch extractor selects a random window of length h, from a random experiment, with a uniform probability. 
@@ -104,6 +120,9 @@ if wandb_record:
     # We log only scalars (train/val loss). Avoid logging full batches to keep runs light.
 
 
+# ========================================================================================================= #
+# =========================================== UTILS ======================================================= #
+# ========================================================================================================= #
 
 def train(model, dataloader, criterion, optimizer, device):
     '''
@@ -177,7 +196,6 @@ def train(model, dataloader, criterion, optimizer, device):
 
     return running_loss / len(dataloader)
 
-
 def validate(model, dataloader, criterion, device):
     '''
     Evaluates the model over the given data batches. Along the windows of length h, the model estimates recursively the output omega_hat_t, with t = 1...h.
@@ -218,6 +236,294 @@ def validate(model, dataloader, criterion, device):
 
     return running_loss / len(dataloader)
 
+
+# ========================================================================================================= #
+# =========================================== RUNS ======================================================== #
+# ========================================================================================================= #
+
+def run_single_experiment(cfg, sweep_name=None, out_dir="runs"):  
+    # Other settings
+    cfg.beta1 = 0.9
+    cfg.beta2 = 0.95
+
+    print(cfg.seq_len)
+
+    # Derived settings
+    n_skip = 0
+    cfg.block_size = cfg.seq_len
+    cfg.lr_decay_iters = cfg.max_iters
+    cfg.min_lr = cfg.lr/10.0  #
+    cfg.decay_lr = not cfg.fixed_lr
+    cfg.eval_batch_size = cfg.batch_size
+
+    # Set seed for reproducibility
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed) # not needed? All randomness now handled with generators
+
+    # Create out dir
+    if out_dir is None:
+        out_dir = cfg.model_dir
+
+    if sweep_name is None:
+        sweep_name = cfg.out_file     # reuse the file name for folder naming
+
+    model_dir = Path(out_dir) / sweep_name
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+
+    # Configure compute
+    cuda_device = "cuda:0"
+
+    torch.set_num_threads(cfg.threads)
+    use_cuda = not cfg.no_cuda and torch.cuda.is_available()
+    device_name = cuda_device if use_cuda else "cpu"
+    device = torch.device(device_name)
+    device_type = 'cuda' if 'cuda' in device_name else 'cpu' # for later use in torch.autocast
+    print("device_type: ", device_type, "\n\n\n")
+    torch.set_float32_matmul_precision("high")
+    torch.cuda.set_device(device)
+    print(torch.cuda.is_available())
+    print(torch.cuda.current_device())
+
+    # Load all your DataFrames (replace with your data loading code)
+    # folder_path = '../data/CL_experiments/train/inertia13_ki-0.0061-kp-11.8427'
+    dfs = []
+    for path_iter in folder_path_training:
+        new_dfs = load_dataframes_from_folder(path_iter)
+        dfs= dfs + new_dfs
+        print(f"Loaded {len(new_dfs)} DataFrames from {path_iter}.")
+
+    train_ds = Dataset(dfs=dfs, seq_len=cfg.seq_len)
+    train_dl = DataLoader(train_ds, batch_size=cfg.batch_size, pin_memory=True, shuffle=True)
+
+    dfs_val = []
+    for path_iter in folder_path_val:
+        dfs_val = dfs_val + load_dataframes_from_folder(path_iter)
+        print(f"Loaded {len(dfs_val)} DataFrames from {path_iter}.")
+
+    val_ds = Dataset(dfs=dfs_val, seq_len=cfg.seq_len)
+    val_dl = DataLoader(val_ds, batch_size=cfg.eval_batch_size, pin_memory=True, shuffle=True)
+
+
+    # ===========================================================================================================================================================================================================
+    print("saving model in: ", cfg.out_file)
+    if cfg.init_from != "scratch":
+        print("starting from model: ", cfg.in_file, " (", cfg.init_from, ")")
+
+    print(f"sequence length: {cfg.seq_len}")
+    print(f"max iterations:  {cfg.max_iters}")
+    print(f"batch size:      {cfg.batch_size}")
+    print(f"learning rate:   {cfg.lr}")
+    print(f"layers:          {cfg.n_layer}")
+    print(f"heads:           {cfg.n_head}")
+    print(f"embd:            {cfg.n_embd}")
+    print(f"patience:        {cfg.patience}")
+
+    
+    if alternative_batch_extractor:
+        print("using alternative batch extractor")
+    
+    if not SWEEP_MODE: input("everything ok?")
+
+    # Model
+    model_args = dict(n_layer=cfg.n_layer, n_head=cfg.n_head, n_embd=cfg.n_embd, n_x=cfg.nx, n_y=cfg.ny, n_u=cfg.nu, block_size=cfg.block_size,
+                      bias=cfg.bias, dropout=cfg.dropout)  # start with model_args from command line
+
+    if cfg.init_from == "scratch":
+        gptconf = GPTConfig(**model_args)
+        model = GPT(gptconf)
+    elif cfg.init_from == "resume" or cfg.init_from == "pretrained":
+        ckpt_path = model_dir / f"{cfg.in_file}.pt"
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+        gptconf = GPTConfig(**checkpoint["model_args"])
+        model = GPT(gptconf)
+        state_dict = checkpoint['model']
+        # fix the keys of the state dictionary :(
+        # honestly no idea how checkpoints sometimes get this prefix, have to debug more
+        unwanted_prefix = '_orig_mod.'
+        for k, v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+        model.load_state_dict(state_dict)
+
+    # Wrap the model with DataParallel
+    if torch.cuda.device_count() > 1:
+        print("Using all the GPUs!")
+        model = nn.DataParallel(model)
+
+    model.to(device)
+
+    if cfg.compile:
+        model = torch.compile(model)  # requires PyTorch 2.0
+
+    # Optimizer
+    # Check if model is wrapped by DataParallel
+    if isinstance(model, torch.nn.DataParallel):
+        optimizer = model.module.configure_optimizers(cfg.weight_decay, cfg.lr, (cfg.beta1, cfg.beta2), device_type)
+    else:
+        optimizer = model.configure_optimizers(cfg.weight_decay, cfg.lr, (cfg.beta1, cfg.beta2), device_type)
+
+    if cfg.init_from == "resume":
+        optimizer.load_state_dict(checkpoint['optimizer'])
+
+    # Criterion
+    criterion = torch.nn.MSELoss()
+
+    # Training and validation loop
+    LOSS_ITR = []
+    LOSS_VAL = []
+    best_val_loss = float('inf')
+
+    if cfg.init_from == ("scratch") or cfg.init_from == "pretrained":
+        # Training and validation loop
+        LOSS_ITR = []
+        LOSS_VAL = []
+        iter_num = 0
+        best_val_loss = np.inf
+        train_time = 0.0
+    elif cfg.init_from == "resume":
+        # Training and validation loop
+        LOSS_ITR = checkpoint['LOSS']
+        LOSS_VAL = checkpoint['LOSS_VAL']
+        iter_num = checkpoint["iter_num"]
+        best_val_loss = checkpoint['best_val_loss']
+        train_time = checkpoint['train_time']
+
+    get_lr = partial(warmup_cosine_lr, lr=cfg.lr, min_lr=cfg.min_lr,
+                     warmup_iters=cfg.warmup_iters, lr_decay_iters=cfg.lr_decay_iters)
+    time_start = time.time()
+
+    best_epoch = iter_num -1
+    patience = cfg.patience 
+    no_improve = 0
+    tol = 0.001
+
+    for epoch in range(iter_num+1, cfg.max_iters):
+        ## I COMMENTED THIS PART BECAUSE THERE WAS A PROBLEM WITH LR : IT WAS STUCK TO 0
+        if cfg.decay_lr:
+            lr_iter = get_lr(epoch)
+        else:
+            lr_iter = cfg.lr
+        optimizer.param_groups[0]['lr'] = lr_iter
+
+        #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.lr_decay_iters)
+        train_loss = train(model, train_dl, criterion, optimizer, device)
+        val_loss = validate(model, val_dl, criterion, device)
+        #scheduler.step()
+        # print("...")
+
+        LOSS_ITR.append(train_loss)
+        LOSS_VAL.append(val_loss)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_epoch = epoch
+            checkpoint = {
+                'model': model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'model_args': model_args,
+                'iter_num': epoch,
+                'train_time': time.time() - time_start + train_time,
+                'LOSS': LOSS_ITR,
+                'LOSS_VAL': LOSS_VAL,
+                'best_val_loss': best_val_loss,
+                'cfg': cfg,
+            }
+
+            torch.save(checkpoint, model_dir / f"{cfg.out_file}.pt")
+            
+            no_improve = 0 #if val_loss < best_val_loss - tol else no_improve + 1
+        else:
+            no_improve += 1
+        # --- EARLY STOP (optional) ---
+        if no_improve >= patience:
+            print(f"Early stopping at iter {epoch} (patience={patience})")
+            break
+
+        digits = len(str(cfg.max_iters))
+        print("-----\n",
+            "model: ", checkpoint_name_to_save, "\tno_improve: ", no_improve, "/", patience)
+        print(f"Epoch [{epoch:>{digits}}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}, best_val_loss: {best_val_loss:.4f}")
+        if wandb_record:
+            wandb.log({"epoch": epoch, "loss": train_loss, "val_loss": val_loss, "best_epoch": best_epoch})
+
+    print("Training complete. Best model saved as: ", checkpoint_name_to_save)
+
+
+    # when the last iteration is reached, a checkpoint is saved, just to be able to see how the training and validation losses progressed after finding a minimum validation loss point
+    checkpoint = {
+                'model': model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'model_args': model_args,
+                'iter_num': cfg.max_iters,
+                'train_time': time.time() - time_start + train_time,
+                'LOSS': LOSS_ITR,
+                'LOSS_VAL': LOSS_VAL,
+                'best_val_loss': best_val_loss,
+                'cfg': cfg,
+    }
+
+    torch.save(checkpoint, model_dir / f"{cfg.out_file}_loss_check.pt")
+    return best_val_loss
+
+def sweep_hyperparams(base_cfg, sweep, out_root="sweep_runs"):
+    keys, values = zip(*sweep.items())
+    out_root = Path(out_root)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    results = []  # collect all runs here
+    i = 0
+
+    for combo in itertools.product(*values):
+        overrides = dict(zip(keys, combo))
+
+        # build experiment name: e.g. layers8_heads4_lr1e-4
+        name = "_".join(f"{k}{v}" for k, v in overrides.items())
+
+        cfg = copy.deepcopy(base_cfg)
+        for k, v in overrides.items():
+            setattr(cfg, k, v)
+
+        # optional: encode name into output file
+        cfg.out_file = f"sweep_{name}"
+
+        print(f"\n\n=== Running {name} ===")
+        print("Resolved cfg for this run:")
+        print(f"  n_layer   = {cfg.n_layer}")
+        print(f"  n_head    = {cfg.n_head}")
+        print(f"  n_embd    = {cfg.n_embd}")
+        print(f"  batch_size= {cfg.batch_size}")
+        print(f"  max_iters = {cfg.max_iters}")
+        print(f"  lr        = {cfg.lr}")
+        print(f"  patience  = {cfg.patience}")
+        if i==0: input("Everything ok?")
+        i += 1
+
+        score = run_single_experiment(cfg, sweep_name=name, out_dir=str(out_root))
+        print(f"Val score = {score}")
+
+        # store this run
+        row = {
+            "name": name,
+            "score": score,
+        }
+        # flatten hyperparams into the row
+        row.update(overrides)
+        results.append(row)
+
+    # ---- save all results at the end ----
+    if results:
+        df = pd.DataFrame(results)
+        results_path = out_root / "sweep_results.csv"
+        df.to_csv(results_path, index=False)
+        print(f"\nSaved sweep results to {results_path}")
+    else:
+        print("\nNo sweep runs executed, nothing to save.")
+
+
+# ========================================================================================================= #
+# =========================================== MAIN ======================================================== #
+# ========================================================================================================= #
 
 def make_parser(
     *,
@@ -297,6 +603,8 @@ def make_parser(
                         help='batches per evaluation')
     parser.add_argument('--fixed-lr', action='store_true', default=False,
                         help='disable LR scheduling (use fixed lr)')
+    parser.add_argument('--patience', type=int, default=200,
+                        help='early stopping patience')
 
     # --- Compute ---
     parser.add_argument('--threads', type=int, default=16,
@@ -310,8 +618,6 @@ def make_parser(
 
     return parser
 
-
-# Example usage from another script
 if __name__ == '__main__':
     # These symbols must exist in your script/environment:
     # checkpoint_name_to_save, checkpoint_name_to_open, mode,
@@ -332,221 +638,17 @@ if __name__ == '__main__':
     cfg = parser.parse_args()
     # ... training code using cfg ...
 
-    # Other settings
-    cfg.beta1 = 0.9
-    cfg.beta2 = 0.95
-
-    print(cfg.seq_len)
-
-    # Derived settings
-    n_skip = 0
-    cfg.block_size = cfg.seq_len
-    cfg.lr_decay_iters = cfg.max_iters
-    cfg.min_lr = cfg.lr/10.0  #
-    cfg.decay_lr = not cfg.fixed_lr
-    cfg.eval_batch_size = cfg.batch_size
-
-    # Set seed for reproducibility
-    torch.manual_seed(cfg.seed)
-    np.random.seed(cfg.seed) # not needed? All randomness now handled with generators
-
-    # Create out dir
-    model_dir = Path(cfg.model_dir)
-    model_dir.mkdir(exist_ok=True)
-
-    # Configure compute
-    cuda_device = "cuda:0"
-
-    torch.set_num_threads(cfg.threads)
-    use_cuda = not cfg.no_cuda and torch.cuda.is_available()
-    device_name = cuda_device if use_cuda else "cpu"
-    device = torch.device(device_name)
-    device_type = 'cuda' if 'cuda' in device_name else 'cpu' # for later use in torch.autocast
-    print("device_type: ", device_type, "\n\n\n")
-    torch.set_float32_matmul_precision("high")
-    torch.cuda.set_device(device)
-    print(torch.cuda.is_available())
-    print(torch.cuda.current_device())
-
-    # Load all your DataFrames (replace with your data loading code)
-    # folder_path = '../data/CL_experiments/train/inertia13_ki-0.0061-kp-11.8427'
-    dfs = []
-    for path_iter in folder_path_training:
-        new_dfs = load_dataframes_from_folder(path_iter)
-        dfs= dfs + new_dfs
-        print(f"Loaded {len(new_dfs)} DataFrames from {path_iter}.")
-
-    train_ds = Dataset(dfs=dfs, seq_len=cfg.seq_len)
-    train_dl = DataLoader(train_ds, batch_size=cfg.batch_size, pin_memory=True, shuffle=True)
-
-    dfs_val = []
-    for path_iter in folder_path_val:
-        dfs_val = dfs_val + load_dataframes_from_folder(path_iter)
-        print(f"Loaded {len(dfs_val)} DataFrames from {path_iter}.")
-
-    val_ds = Dataset(dfs=dfs_val, seq_len=cfg.seq_len)
-    val_dl = DataLoader(val_ds, batch_size=cfg.eval_batch_size, pin_memory=True, shuffle=True)
-
-
-    print("saving model in: ", checkpoint_name_to_save)
-    if mode != "scratch":
-        print("starting from model: ", checkpoint_name_to_open, " (", mode, ")")
-    print("sequence length: ", sequence_length)
-    print("max iterations: ", max_iteration_number)
-    print("batch size: ", batch_size_)
-    print("learning rate: ", learning_rate_value)
-    print("layers: ", layers_number)
-    print("heads: ", heads_number)
-    print("embd: ", embd_number)
-    
-    if alternative_batch_extractor:
-        print("using alternative batch extractor")
-    
-    input("everything ok?")
-
-    # Model
-    model_args = dict(n_layer=cfg.n_layer, n_head=cfg.n_head, n_embd=cfg.n_embd, n_x=cfg.nx, n_y=cfg.ny, n_u=cfg.nu, block_size=cfg.block_size,
-                      bias=cfg.bias, dropout=cfg.dropout)  # start with model_args from command line
-
-    if cfg.init_from == "scratch":
-        gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf)
-    elif cfg.init_from == "resume" or cfg.init_from == "pretrained":
-        ckpt_path = model_dir / f"{cfg.in_file}.pt"
-        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
-        gptconf = GPTConfig(**checkpoint["model_args"])
-        model = GPT(gptconf)
-        state_dict = checkpoint['model']
-        # fix the keys of the state dictionary :(
-        # honestly no idea how checkpoints sometimes get this prefix, have to debug more
-        unwanted_prefix = '_orig_mod.'
-        for k, v in list(state_dict.items()):
-            if k.startswith(unwanted_prefix):
-                state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-        model.load_state_dict(state_dict)
-
-    # Wrap the model with DataParallel
-    if torch.cuda.device_count() > 1:
-        print("Using all the GPUs!")
-        model = nn.DataParallel(model)
-
-    model.to(device)
-
-    if cfg.compile:
-        model = torch.compile(model)  # requires PyTorch 2.0
-
-    # Optimizer
-    # Check if model is wrapped by DataParallel
-    if isinstance(model, torch.nn.DataParallel):
-        optimizer = model.module.configure_optimizers(cfg.weight_decay, cfg.lr, (cfg.beta1, cfg.beta2), device_type)
+    if SWEEP_MODE:
+        sweep_hyperparams(cfg, sweep)
     else:
-        optimizer = model.configure_optimizers(cfg.weight_decay, cfg.lr, (cfg.beta1, cfg.beta2), device_type)
-
-    if cfg.init_from == "resume":
-        optimizer.load_state_dict(checkpoint['optimizer'])
-
-    # Criterion
-    criterion = torch.nn.MSELoss()
-
-    # Training and validation loop
-    LOSS_ITR = []
-    LOSS_VAL = []
-    best_val_loss = float('inf')
-
-    if cfg.init_from == ("scratch") or cfg.init_from == "pretrained":
-        # Training and validation loop
-        LOSS_ITR = []
-        LOSS_VAL = []
-        iter_num = 0
-        best_val_loss = np.inf
-        train_time = 0.0
-    elif cfg.init_from == "resume":
-        # Training and validation loop
-        LOSS_ITR = checkpoint['LOSS']
-        LOSS_VAL = checkpoint['LOSS_VAL']
-        iter_num = checkpoint["iter_num"]
-        best_val_loss = checkpoint['best_val_loss']
-        train_time = checkpoint['train_time']
-
-    get_lr = partial(warmup_cosine_lr, lr=cfg.lr, min_lr=cfg.min_lr,
-                     warmup_iters=cfg.warmup_iters, lr_decay_iters=cfg.lr_decay_iters)
-    time_start = time.time()
-
-    best_epoch = iter_num -1
-    patience = 200 
-    no_improve = 0
-    tol = 0.001
-
-    for epoch in range(iter_num+1, cfg.max_iters):
-        ## I COMMENTED THIS PART BECAUSE THERE WAS A PROBLEM WITH LR : IT WAS STUCK TO 0
-        if cfg.decay_lr:
-            lr_iter = get_lr(epoch)
-        else:
-            lr_iter = cfg.lr
-        optimizer.param_groups[0]['lr'] = lr_iter
-
-        #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.lr_decay_iters)
-        train_loss = train(model, train_dl, criterion, optimizer, device)
-        val_loss = validate(model, val_dl, criterion, device)
-        #scheduler.step()
-        # print("...")
-
-        LOSS_ITR.append(train_loss)
-        LOSS_VAL.append(val_loss)
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_epoch = epoch
-            checkpoint = {
-                'model': model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'model_args': model_args,
-                'iter_num': epoch,
-                'train_time': time.time() - time_start + train_time,
-                'LOSS': LOSS_ITR,
-                'LOSS_VAL': LOSS_VAL,
-                'best_val_loss': best_val_loss,
-                'cfg': cfg,
-            }
-
-            torch.save(checkpoint, model_dir / f"{cfg.out_file}.pt")
-            
-            no_improve = 0 #if val_loss < best_val_loss - tol else no_improve + 1
-        else:
-            no_improve += 1
-        # --- EARLY STOP (optional) ---
-        if no_improve >= patience:
-            print(f"Early stopping at iter {epoch} (patience={patience})")
-            break
-
-        digits = len(str(cfg.max_iters))
-        print("-----\n",
-            "model: ", checkpoint_name_to_save, "\tno_improve: ", no_improve, "/", patience)
-        print(f"Epoch [{epoch:>{digits}}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}, best_val_loss: {best_val_loss:.4f}")
-        if wandb_record:
-            wandb.log({"epoch": epoch, "loss": train_loss, "val_loss": val_loss, "best_epoch": best_epoch})
-
-    print("Training complete. Best model saved as: ", checkpoint_name_to_save)
+        # Run ONE experiment normally
+        best = run_single_experiment(cfg)
+        print("Best loss:", best)
 
 
-    # when the last iteration is reached, a checkpoint is saved, just to be able to see how the training and validation losses progressed after finding a minimum validation loss point
-    checkpoint = {
-                'model': model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'model_args': model_args,
-                'iter_num': cfg.max_iters,
-                'train_time': time.time() - time_start + train_time,
-                'LOSS': LOSS_ITR,
-                'LOSS_VAL': LOSS_VAL,
-                'best_val_loss': best_val_loss,
-                'cfg': cfg,
-    }
+    # GOTCHA: Keep seq_len (H) ≤ model.block_size; else positional embedding lookup will fail.
+    # GOTCHA: batch_u_copy[:, :, 4] is assumed to be the ω̂ channel; keep dataset channel order consistent.
+    # GOTCHA: last_predictions must keep requires_grad=True in training; do not detach it.
+    # GOTCHA: If validation loss >> train loss, check normalization consistency and that val uses the same autoregressive schedule.
+    # GOTCHA: Warmup too long can freeze LR near 0; ensure warmup_iters ≪ max_iters.
 
-    torch.save(checkpoint, model_dir / f"{cfg.out_file}_loss_check.pt")
-
-
-# GOTCHA: Keep seq_len (H) ≤ model.block_size; else positional embedding lookup will fail.
-# GOTCHA: batch_u_copy[:, :, 4] is assumed to be the ω̂ channel; keep dataset channel order consistent.
-# GOTCHA: last_predictions must keep requires_grad=True in training; do not detach it.
-# GOTCHA: If validation loss >> train loss, check normalization consistency and that val uses the same autoregressive schedule.
-# GOTCHA: Warmup too long can freeze LR near 0; ensure warmup_iters ≪ max_iters.

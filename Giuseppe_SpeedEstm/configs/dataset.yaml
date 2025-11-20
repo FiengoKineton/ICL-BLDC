@@ -17,3 +17,4 @@ data:
       vb: [-24, 24]
       omega: [0, 2500]
   inject_last_channel: true
+show_print: True

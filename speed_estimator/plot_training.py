@@ -389,4 +389,5 @@ def main():
 
 if __name__ == "__main__":
     # >> python.exe .\speed_estimator\plot_training.py .\out\test.pt --show --logy
+    # python speed_estimator/plot_training.py sweep_runs/lr1e-4*/sweep_lr1e-4.pt --logy
     main()

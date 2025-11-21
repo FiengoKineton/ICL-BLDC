@@ -17,8 +17,6 @@ import os, sys
 import itertools
 
 
-SWEEP_MODE = True
-
 # -----------------------------------------------------------------------------
 # Training script for a causal (decoder-only) Transformer used as an ICL estimator.
 # The model consumes a window of continuous tokens u_{1:T} (e.g. [ia, ib, va, vb, ω̂_{k-1}])
@@ -59,6 +57,9 @@ max_iteration_number = 10_000
 learning_rate_value = 1e-5
 
 
+
+# Winner: n_layer4_n_head4_n_embd32_lr0.0001_patience20_max_iters500_batch_size128
+SWEEP_MODE = True
 sweep = {
     "n_layer":    [4, 8],                # was "layers"
     "n_head":     [2, 4],                # was "heads"

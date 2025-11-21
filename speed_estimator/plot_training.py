@@ -388,6 +388,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # run either {name}.pt or {name}_loss_check.pt
     # >> python.exe .\speed_estimator\plot_training.py .\out\test.pt --show --logy
-    # python speed_estimator/plot_training.py sweep_runs/lr1e-4*/sweep_lr1e-4.pt --logy
+    # python speed_estimator/plot_training.py sweep_runs/n_layer4_n_head4_n_embd32_lr0.0001_patience20_max_iters500_batch_size128/sweep_n_layer4_n_head4_n_embd32_lr0.0001_patience20_max_iters500_batch_size128.pt --logy
     main()

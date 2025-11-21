@@ -62,8 +62,8 @@ learning_rate_value = 1e-5
 SWEEP_MODE = True
 sweep = {
     "n_layer":    [4, 8],                # was "layers"
-    "n_head":     [2, 4],                # was "heads"
-    "n_embd":     [16, 32],              # was "embd"
+    "n_head":     [2, 4],                # was "heads" 
+    "n_embd":     [16, 32],              # was "embd" | n_embd/n_head: int
     "lr":         [1e-4, 5e-5, 1e-5],
     "patience":   [20],
     "max_iters":  [500],

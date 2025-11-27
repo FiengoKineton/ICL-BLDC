@@ -376,6 +376,8 @@ def run_single_experiment(cfg, sweep_name=None, out_dir="runs"):
         optimizer.load_state_dict(checkpoint['optimizer'])
     # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
 
+
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
     # Criterion
     criterion = torch.nn.MSELoss()
 
@@ -458,8 +460,10 @@ def run_single_experiment(cfg, sweep_name=None, out_dir="runs"):
             wandb.log({"epoch": epoch, "loss": train_loss, "val_loss": val_loss, "best_epoch": best_epoch})
 
     print("Training complete. Best model saved as: ", checkpoint_name_to_save)
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
 
 
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
     # when the last iteration is reached, a checkpoint is saved, just to be able to see how the training and validation losses progressed after finding a minimum validation loss point
     checkpoint = {
                 'model': model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict(),
@@ -474,6 +478,7 @@ def run_single_experiment(cfg, sweep_name=None, out_dir="runs"):
     }
 
     torch.save(checkpoint, model_dir / f"{cfg.out_file}_loss_check.pt")
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
     return best_val_loss
 
 def sweep_hyperparams(base_cfg, sweep, out_root="sweep_runs"):

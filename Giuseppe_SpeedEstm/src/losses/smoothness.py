@@ -9,3 +9,6 @@ def loss_smoothness(y_hat: torch.Tensor, order: int = 1) -> torch.Tensor:
         d1 = y_hat[:, 1:] - y_hat[:, :-1]
         diff = d1[:, 1:] - d1[:, :-1]
     return torch.mean(diff ** 2)
+
+
+# CHECKED -- all good!

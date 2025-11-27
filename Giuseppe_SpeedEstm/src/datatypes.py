@@ -25,6 +25,7 @@ class ModelCfg:
     dropout: float = 0.1
     n_u: int = 5
     n_y: int = 1
+    n_x: int = 2
     block_size: int = 128
     bias: bool = False
 

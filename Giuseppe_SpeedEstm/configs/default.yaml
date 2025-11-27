@@ -1,5 +1,5 @@
 # configs/default.yaml
-seed: 1337
+seed: 42
 device: "cuda"
 exp_name: "bldc_zerostep"
 show_print: True
@@ -35,7 +35,7 @@ model:
   n_x: 4
   block_size: 10
   bias: false
-  compile: false
+  #compile: false
 
 train:
   epochs: 10000               # interpreted as "max_iters" style loop in old code
@@ -55,6 +55,7 @@ optim:
     warmup_steps: 1000
     max_steps: 20000          # typically matches train.epochs if you treat as iters
     min_lr_scale: 0.01        # final lr = lr * min_lr_scale
+    warmup_iters: 5000
 
 loss:
   components:

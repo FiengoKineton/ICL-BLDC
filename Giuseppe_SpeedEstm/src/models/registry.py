@@ -14,7 +14,7 @@ _MODELS = {
 def build_model(name: str, cfg: Dict[str, Any]):
     if name not in _MODELS or GPT is None or GPTConfig is None:
         raise RuntimeError("Model 'gpt_zerostep' requires src/models/transformer_zerostep.py with GPT/GPTConfig.")
-    mcfg = GPTConfig(
+    margs = dict(
         n_layer=cfg.get("n_layer", 4),
         n_head=cfg.get("n_head", 4),
         n_embd=cfg.get("d_model", 128),
@@ -25,7 +25,8 @@ def build_model(name: str, cfg: Dict[str, Any]):
         n_y=cfg.get("n_y", 1),
         n_x=cfg.get("n_x", 4),
     )
-    return GPT(mcfg)
+    mcfg = GPTConfig(**margs)
+    return GPT(mcfg), margs
 
 
 # CHECKED -- all good!

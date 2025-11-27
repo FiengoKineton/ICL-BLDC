@@ -1,10 +1,11 @@
 # src/optim/factory.py
 from __future__ import annotations
 from typing import Dict, Any
+from functools import partial
 from .optimizers import configure_adamw
-from .schedulers import warmup_cosine_lr
+from .schedulers import warmup_cosine_lr, warmup_cosine_lr_old
 
-def build_optimizer_and_scheduler(model, cfg_optim: Dict[str, Any]):
+def build_optimizer_and_scheduler(model, device, max_iter, cfg_optim: Dict[str, Any]):
     name = cfg_optim.get('name', 'adamw').lower()
     lr = float(cfg_optim.get('lr', 3e-4))
     betas = tuple(cfg_optim.get('betas', (0.9, 0.95)))
@@ -29,7 +30,12 @@ def build_optimizer_and_scheduler(model, cfg_optim: Dict[str, Any]):
                 return warmup_cosine_lr(step, base_lr=lr, warmup_steps=warmup_steps, max_steps=max_steps, min_lr_scale=min_lr_scale)
         else:
             raise ValueError(f"Unsupported scheduler: {sname}")
-    return opt, scheduler
+    
+
+    opt_old = model.configure_optimizers(weight_decay, lr, betas, device)
+    scheduler_old = partial(warmup_cosine_lr_old, lr=lr, min_lr=lr/10.0,
+                     warmup_iters=int(cfg_optim.get("warmup_iters", 5000)), lr_decay_iters=max_iter)
+    return opt_old, scheduler_old
 
 
 # CHECKED -- all good!

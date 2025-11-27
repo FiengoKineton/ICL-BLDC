@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Dict, Any, List, Optional, Callable
-import torch, copy
+import torch, copy, time
 from torch.utils.data import DataLoader
 from ..losses import build_loss
 from .evaluator import rollout
@@ -23,7 +23,6 @@ def train_loop(
     # if you use a custom loss builder:
     # loss_fn = build_loss(cfg["loss"])
     # otherwise just pass torch.nn.MSELoss() etc. into cfg
-    print("check")
     loss_cfg = cfg.get("loss", None)
     if loss_cfg is None:
         loss_fn = torch.nn.MSELoss()
@@ -36,13 +35,15 @@ def train_loop(
     best_history: List[Dict[str, float]] = []
     step = 0
     epochs = cfg["train"]["epochs"]
+    patience = cfg["train"]["patience"]
     show_print: bool = bool(cfg.get("show_print", True))
-    print(show_print)
 
     best_val_loss = float("inf")
     best_state_dict = best_opt_dict = None
     best_epoch = -1
 
+    epoch_time = time_start = time.time()
+    no_improve = 0
 
     for epoch in range(epochs):
         train_loss, step = train(
@@ -62,10 +63,13 @@ def train_loop(
             device=device,
         )
 
+        epoch_time = time.time() - epoch_time
+
         rec = {
             "epoch": epoch,
             "train_total": float(train_loss),
             "val_total": float(val_loss),
+            "time": epoch_time,
         }
         history.append(rec)
 
@@ -77,18 +81,28 @@ def train_loop(
             best_state_dict = copy.deepcopy(model.state_dict())
             best_opt_dict = copy.deepcopy(optimizer.state_dict())
             best_history = copy.deepcopy(history)
+            best_time = epoch_time
+
+            no_improve = 0
+        else: 
+            no_improve += 1
 
         if show_print:
             print(
-                f"[epoch {epoch}] "
-                f"train_total={train_loss:.4e} "
-                f"val_total={val_loss:.4e} "
-                f"best_val={best_val_loss:.4e} "
-                f"(best_epoch={best_epoch}) "
+                f"[{epoch:05d}] \n"
+                f"\ttime={epoch_time:.4e}, no_improve={no_improve:03d} / {patience:05d} \n"
+                f"\ttrain={train_loss:.4e} | "
+                f"val={val_loss:.4e} | "
+                f"best={best_val_loss:.4e} ({best_epoch:03d}) | "
                 f"lr={optimizer.param_groups[0]['lr']:.3e}"
             )
 
-    return history, (best_state_dict, best_opt_dict, best_val_loss, best_epoch, best_history)
+        if no_improve >= patience:
+            print(f"Early stopping at iter {epoch} (patience={patience})")
+            break
+
+    train_time = time.time() - time_start
+    return history, (best_state_dict, best_opt_dict, best_val_loss, best_epoch, best_history, best_time), train_time
 
 
 def train(

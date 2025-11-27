@@ -41,7 +41,7 @@ train:
   epochs: 10000               # interpreted as "max_iters" style loop in old code
   eval_interval: 10
   eval_iters: 10
-  patience: 0                 # set >0 to enable early stop by callbacks (not required)
+  patience: 10000                 # set >0 to enable early stop by callbacks (not required)
   grad_clip: null
   mixed_precision: "off"      # "off" | "fp16" | "bf16"
 

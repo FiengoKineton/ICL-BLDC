@@ -11,7 +11,7 @@ from src.engine.checkpoint import save_checkpoint                               
 from src.utils.io import make_run_dir                                           ## -- ##
 from src.utils.plotting import plot_history                                     ## -- ##
 
-
+# cd .\Giuseppe_SpeedEstm\
 # python -m scripts.train
 
 def main():
@@ -39,14 +39,25 @@ def main():
     #if cfg_obj.model.compile: model = torch.compile(model)
     optimizer, scheduler_fn = build_optimizer_and_scheduler(model, device, IndentationError(cfg["train"]["epochs"]), cfg["optim"])
 
-    print("check")
-    history, best = train_loop( model=model, 
-                                optimizer=optimizer, 
-                                scheduler_fn=scheduler_fn, 
-                                train_loader=train_loader, 
-                                val_loader=val_loader, 
-                                cfg=cfg, 
-                                device=device, )
+    print(f"\n\n=== Running {cfg["exp_name"]}===")
+    print("Resolved cfg for this run:")
+    print(f"  n_layer   = {cfg["model"]["n_layer"]}")
+    print(f"  n_head    = {cfg["model"]["n_head"]}")
+    print(f"  n_embd    = {cfg["model"]["d_model"]}")
+    print(f"  batch_size= {cfg["data"]["batch_size"]}")
+    print(f"  max_iters = {cfg["train"]["epochs"]}")
+    print(f"  lr        = {cfg["optim"]["lr"]}")
+    print(f"  patience  = {cfg["train"]["patience"]}")
+    input("Everything ok?")
+
+    history, best, train_time \
+          = train_loop( model=model, 
+                        optimizer=optimizer, 
+                        scheduler_fn=scheduler_fn, 
+                        train_loader=train_loader, 
+                        val_loader=val_loader, 
+                        cfg=cfg, 
+                        device=device, )
 
     run_dir = make_run_dir(args.runs, cfg_obj.exp_name)
     save_checkpoint(path=os.path.join(run_dir, "ckpt_last.pt"), 
@@ -57,7 +68,8 @@ def main():
                     epoch=history[-1]["epoch"] if history else 0, 
                     history=history, 
                     cfg=cfg, 
-                    best=best)
+                    best=best, 
+                    train_time=train_time, )
     plot_history(history, run_dir)
     with open(os.path.join(run_dir, "cfg.yaml"), "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, sort_keys=False)

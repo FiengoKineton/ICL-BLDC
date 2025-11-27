@@ -36,7 +36,7 @@ def train_loop(
     best_history: List[Dict[str, float]] = []
     step = 0
     epochs = cfg["train"]["epochs"]
-    show_print: bool = bool(cfg["train"].get("show_print", False))
+    show_print: bool = bool(cfg.get("show_print", True))
     print(show_print)
 
     best_val_loss = float("inf")

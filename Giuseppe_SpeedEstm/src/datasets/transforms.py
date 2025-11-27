@@ -6,3 +6,6 @@ def fixed_range_normalize(arr: np.ndarray, lo: float, hi: float) -> np.ndarray:
 
 def zscore_normalize(arr: np.ndarray, mean: float, std: float) -> np.ndarray:
     return (arr - mean) / max(std, 1e-12)
+
+
+# NOT USED!

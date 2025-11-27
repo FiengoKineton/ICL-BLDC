@@ -14,3 +14,6 @@ def plot_history(history: list[dict], outdir: str):
     plt.xlabel("epoch"); plt.ylabel("loss"); plt.legend(); plt.tight_layout()
     plt.savefig(os.path.join(outdir, "curves.png"))
     plt.close()
+
+
+# CHECKED -- all good!

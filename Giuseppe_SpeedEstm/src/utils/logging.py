@@ -2,3 +2,6 @@ from __future__ import annotations
 from rich.console import Console
 console = Console()
 def log(msg: str): console.print(msg)
+
+
+# NOT USED!

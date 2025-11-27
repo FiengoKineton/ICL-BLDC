@@ -42,3 +42,6 @@ def rollout(model, batch: dict, device: torch.device) -> torch.Tensor:
 
     y_hat = torch.cat(y_hat_steps, dim=1)  # (B, H)
     return y_hat
+
+
+# NOT USED!

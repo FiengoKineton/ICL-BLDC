@@ -13,3 +13,6 @@ class EarlyStopper:
             return False
         self.count += 1
         return self.count > self.patience
+
+
+# NOT USED!

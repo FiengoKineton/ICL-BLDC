@@ -1,12 +1,12 @@
-from __future__ import annotations
-import argparse, os, yaml, torch
-from torch.utils.data import DataLoader
-from src.datatypes import load_yaml, merge_cfg, apply_overrides, dict_to_cfg
-from src.datasets import build_dataset, collate_batch
-from src.models import build_model
-from src.optim.factory import build_optimizer_and_scheduler
+from __future__ import annotations                                              ##
+import argparse, os, yaml, torch                                                ##
+from torch.utils.data import DataLoader                                         ##
+from src.datatypes import load_yaml, merge_cfg, apply_overrides, dict_to_cfg    ## -- ##
+from src.datasets import build_dataset, collate_batch                           ## -- ##
+from src.models import build_model                                              ## -- ##
+from src.optim.factory import build_optimizer_and_scheduler                     ## -- ##
+from src.engine.seed import seed_everything                                     ## -- ##
 from src.engine.trainer import train_loop
-from src.engine.seed import seed_everything
 from src.engine.checkpoint import save_checkpoint
 from src.utils.io import make_run_dir
 from src.utils.plotting import plot_history
@@ -31,10 +31,11 @@ def main():
 
     train_ds = build_dataset(cfg_obj.data.name, cfg["data"], "train")
     val_ds   = build_dataset(cfg_obj.data.name, cfg["data"], "val")
-    train_loader = DataLoader(train_ds, batch_size=cfg_obj.data.batch_size, shuffle=True, num_workers=cfg_obj.data.num_workers, collate_fn=collate_batch)
-    val_loader   = DataLoader(val_ds, batch_size=cfg_obj.data.batch_size, shuffle=False, num_workers=cfg_obj.data.num_workers, collate_fn=collate_batch)
+    train_loader = DataLoader(train_ds, batch_size=cfg_obj.data.batch_size, pin_memory=True, shuffle=True, num_workers=cfg_obj.data.num_workers, collate_fn=collate_batch) # base code stops at shuffle
+    val_loader   = DataLoader(val_ds, batch_size=cfg_obj.data.batch_size, pin_memory=True, shuffle=False, num_workers=cfg_obj.data.num_workers, collate_fn=collate_batch)
 
     model = build_model(cfg_obj.model.name, cfg["model"]).to(device)
+    if cfg_obj.model.compile: model = torch.compile(model)
     optimizer, scheduler_fn = build_optimizer_and_scheduler(model, cfg["optim"])
 
     history = train_loop(model, optimizer, scheduler_fn, train_loader, val_loader, cfg, device)

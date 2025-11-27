@@ -45,6 +45,8 @@ checkpoint_name_to_save = "test"
 checkpoint_name_to_open = "test"
 mode = "scratch"  # resume / scratch / pretrained
 
+
+# -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
 # model parameters
 sequence_length = 10 #h
 layers_number = 8 #8
@@ -101,7 +103,7 @@ if alternative_batch_extractor:
     from dataset_alt import Dataset, load_dataframes_from_folder
 else:
     from dataset import Dataset, load_dataframes_from_folder
-
+# -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
 
 
 
@@ -268,6 +270,7 @@ def run_single_experiment(cfg, sweep_name=None, out_dir="runs"):
     if sweep_name is None:
         sweep_name = cfg.out_file     # reuse the file name for folder naming
 
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
     model_dir = Path(out_dir) / sweep_name
     model_dir.mkdir(parents=True, exist_ok=True)
 
@@ -304,9 +307,11 @@ def run_single_experiment(cfg, sweep_name=None, out_dir="runs"):
 
     val_ds = Dataset(dfs=dfs_val, seq_len=cfg.seq_len)
     val_dl = DataLoader(val_ds, batch_size=cfg.eval_batch_size, pin_memory=True, shuffle=True)
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
 
 
     # ===========================================================================================================================================================================================================
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
     print("saving model in: ", cfg.out_file)
     if cfg.init_from != "scratch":
         print("starting from model: ", cfg.in_file, " (", cfg.init_from, ")")
@@ -356,7 +361,10 @@ def run_single_experiment(cfg, sweep_name=None, out_dir="runs"):
 
     if cfg.compile:
         model = torch.compile(model)  # requires PyTorch 2.0
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
 
+
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
     # Optimizer
     # Check if model is wrapped by DataParallel
     if isinstance(model, torch.nn.DataParallel):
@@ -366,6 +374,7 @@ def run_single_experiment(cfg, sweep_name=None, out_dir="runs"):
 
     if cfg.init_from == "resume":
         optimizer.load_state_dict(checkpoint['optimizer'])
+    # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-. #
 
     # Criterion
     criterion = torch.nn.MSELoss()

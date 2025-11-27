@@ -5,8 +5,8 @@ exp_name: "bldc_zerostep"
 show_print: True
 
 data:
-  name: "bldc_csv"            # dataset registry key
-  root: "data/processed"
+  name: "bldc_csv"            # dataset registry key | keep this!
+  root: "data/raw"
   split:
     train: ["simulated/50_percent_low_speed"]
     val:   ["simulated/50_percent_low_speed"]
@@ -25,15 +25,17 @@ data:
   inject_last_channel: true   # model expects channel 4 to be prev prediction
 
 model:
-  name: "gpt_zerostep"        # model registry key
+  name: "gpt_zerostep"        # model registry key | keep this!
   d_model: 16
   n_layer: 8
   n_head: 4
   dropout: 0.0
   n_u: 5
   n_y: 1
+  n_x: 4
   block_size: 10
   bias: false
+  compile: false
 
 train:
   epochs: 10000               # interpreted as "max_iters" style loop in old code
@@ -50,9 +52,9 @@ optim:
   weight_decay: 0.0
   scheduler:
     name: "warmup_cosine"
-    warmup_steps: 5000
-    max_steps: 10000          # typically matches train.epochs if you treat as iters
-    min_lr_scale: 0.1         # final lr = lr * min_lr_scale
+    warmup_steps: 1000
+    max_steps: 20000          # typically matches train.epochs if you treat as iters
+    min_lr_scale: 0.01        # final lr = lr * min_lr_scale
 
 loss:
   components:

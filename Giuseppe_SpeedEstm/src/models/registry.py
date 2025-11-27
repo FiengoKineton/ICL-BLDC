@@ -23,5 +23,9 @@ def build_model(name: str, cfg: Dict[str, Any]):
         bias=cfg.get("bias", False),
         n_u=cfg.get("n_u", 5),
         n_y=cfg.get("n_y", 1),
+        n_x=cfg.get("n_x", 4),
     )
     return GPT(mcfg)
+
+
+# CHECKED -- all good!

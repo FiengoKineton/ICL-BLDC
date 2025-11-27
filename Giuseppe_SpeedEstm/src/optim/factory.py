@@ -1,6 +1,6 @@
 # src/optim/factory.py
 from __future__ import annotations
-from typing import Dict, Any, Tuple
+from typing import Dict, Any
 from .optimizers import configure_adamw
 from .schedulers import warmup_cosine_lr
 
@@ -30,3 +30,6 @@ def build_optimizer_and_scheduler(model, cfg_optim: Dict[str, Any]):
         else:
             raise ValueError(f"Unsupported scheduler: {sname}")
     return opt, scheduler
+
+
+# CHECKED -- all good!

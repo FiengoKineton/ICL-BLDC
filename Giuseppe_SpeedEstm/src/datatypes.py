@@ -114,3 +114,6 @@ def dict_to_cfg(d: dict) -> RootCfg:
         optim=OptimCfg(**d.get("optim", {})),
         loss=LossCfg(**d.get("loss", {})),
     )
+
+
+# CHECKED -- all good!

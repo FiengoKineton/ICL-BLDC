@@ -11,8 +11,11 @@ from src.engine.checkpoint import save_checkpoint                               
 from src.utils.io import make_run_dir                                           ## -- ##
 from src.utils.plotting import plot_history                                     ## -- ##
 
-# cd .\Giuseppe_SpeedEstm\
-# python -m scripts.train
+"""
+cd .\Giuseppe_SpeedEstm\
+python -m scripts.train
+"""
+
 
 def main():
     ap = argparse.ArgumentParser()

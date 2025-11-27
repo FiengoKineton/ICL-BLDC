@@ -6,6 +6,11 @@ from src.datasets import build_dataset, collate_batch
 from src.models import build_model
 from src.engine.evaluator import rollout
 
+"""
+cd .\Giuseppe_SpeedEstm\
+python -m scripts.evaluate
+"""
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)

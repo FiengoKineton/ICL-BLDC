@@ -1,5 +1,10 @@
 import argparse, os, pandas as pd, matplotlib.pyplot as plt
 
+"""
+cd .\Giuseppe_SpeedEstm\
+python -m scripts.plot_runs
+"""
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dirs", nargs="+")

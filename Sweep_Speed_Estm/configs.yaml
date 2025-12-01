@@ -1,0 +1,57 @@
+# configs/base.yaml
+
+experiment:
+  name: "test_run"
+  mode: "single"          # "single" or "sweep"
+  output_root: "runs"     # out directory for single run
+  output_sweep: "sweeps"
+  seed: 42
+
+data:
+  project_root_marker: "Sweep_Speed_Estm"   # used to split cwd
+  data_subdir: "data"
+  train_folders:
+    - "simulated/50_percent_low_speed"
+  val_folders:
+    - "simulated/50_percent_low_speed"
+  seq_len: 10
+  nx: 4
+  nu: 5
+  ny: 1
+
+model:
+  n_layer: 8
+  n_head: 4
+  n_embd: 16
+  dropout: 0.0
+  bias: false
+
+training:
+  batch_size: 128
+  max_iters: 10000
+  lr: 1.0e-5
+  warmup_iters: 5000
+  weight_decay: 0.0
+  eval_interval: 1 #0
+  eval_iters: 1 #0
+  patience: 10000
+  fixed_lr: false
+
+compute:
+  threads: 16
+  no_cuda: false
+  cuda_device: "cuda:0"
+  compile: false
+
+logging:
+  checkpoint_stem: "test"
+  init_from: "scratch"   # scratch | resume | pretrained
+  model_dir: "out"       # not really needed if you use run-specific dirs
+
+# Optional: sweep definition lives in a separate file or here.
+sweep:
+  n_layer:    [4, 8]
+  n_head:     [2, 4]
+  n_embd:     [16, 32]
+  lr:         [1.0e-4, 5.0e-5, 1.0e-5]
+  batch_size: [64, 128]

@@ -51,7 +51,7 @@ logging:
 # Optional: sweep definition lives in a separate file or here.
 sweep:
   n_layer:    [4, 8]
-  n_head:     [2, 4]
+  n_head:     [2, 4, 8]      # sottomultiple di embd
   n_embd:     [16, 32]
   lr:         [1.0e-4, 5.0e-5, 1.0e-5]
   batch_size: [64, 128]

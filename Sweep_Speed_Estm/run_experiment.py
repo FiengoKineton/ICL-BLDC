@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from functools import partial
 from copy import deepcopy
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Dict, Any, List
 
 import torch
 import torch.nn as nn
@@ -12,61 +12,12 @@ import numpy as np
 import pandas as pd
 
 from torch.utils.data import DataLoader
-
-from transformer_zerostep import GPTConfig, GPT, warmup_cosine_lr
+from plot_testing import run_testing
+from temp import run_training_plots
+from transformer_zerostep import warmup_cosine_lr
 from engine import train, validate
+from engine_utils import build_device, build_model
 
-
-def build_device(cfg_compute: Dict[str, Any]):
-    torch.set_num_threads(cfg_compute.get("threads", 16))
-
-    no_cuda = cfg_compute.get("no_cuda", False)
-    cuda_device = cfg_compute.get("cuda_device", "cuda:0")
-
-    use_cuda = (not no_cuda) and torch.cuda.is_available()
-    device_name = cuda_device if use_cuda else "cpu"
-    device = torch.device(device_name)
-    device_type = "cuda" if "cuda" in device_name else "cpu"
-
-    if device_type == "cuda":
-        torch.cuda.set_device(device)
-        torch.set_float32_matmul_precision("high")
-        print(f"[device] CUDA available: {torch.cuda.is_available()}")
-        print(f"[device] Current device: {torch.cuda.current_device()}")
-
-    print(f"[device] Using device: {device_name}")
-    return device, device_type
-
-
-def build_model(cfg_model: Dict[str, Any],
-                cfg_data: Dict[str, Any],
-                device,
-                device_type: str):
-    model_args = dict(
-        n_layer=cfg_model["n_layer"],
-        n_head=cfg_model["n_head"],
-        n_embd=cfg_model["n_embd"],
-        n_x=cfg_data["nx"],
-        n_y=cfg_data["ny"],
-        n_u=cfg_data["nu"],
-        block_size=cfg_data["seq_len"],
-        bias=cfg_model.get("bias", False),
-        dropout=cfg_model.get("dropout", 0.0),
-    )
-
-    gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
-
-    if torch.cuda.device_count() > 1 and device_type == "cuda":
-        print("[model] Using DataParallel on all GPUs")
-        model = nn.DataParallel(model)
-
-    model.to(device)
-
-    if cfg_model.get("compile", False):
-        model = torch.compile(model)
-
-    return model, model_args
 
 
 def configure_optimizer(model, cfg_training: Dict[str, Any], device_type: str):
@@ -137,12 +88,6 @@ def run_single_experiment(
         pin_memory=True,
         shuffle=True,
     )
-    test_dl = DataLoader(
-        test_ds, 
-        batch_size=cfg_training["eval_batch_size"],
-        pin_memory=True,
-        shuffle=True,
-    )
 
     # Device + model
     device, device_type = build_device(cfg_compute)
@@ -209,14 +154,13 @@ def run_single_experiment(
                 best_val_loss = val_loss
                 best_epoch = epoch
                 no_improve = 0
+                best_model = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
 
                 checkpoint = {
-                    "model": model.module.state_dict()
-                    if isinstance(model, nn.DataParallel)
-                    else model.state_dict(),
+                    "model": best_model,
                     "optimizer": optimizer.state_dict(),
                     "model_args": model_args,
-                    "iter_num": epoch,
+                    "iter_num": best_epoch,
                     "train_time": time.time() - start_time,
                     "history": history,
                     "best_val_loss": best_val_loss,
@@ -260,6 +204,25 @@ def run_single_experiment(
     import yaml
     with (run_dir / "config_used.yaml").open("w") as f:
         yaml.safe_dump(cfg, f)
+
+
+    run_testing(
+        run_dir=run_dir,
+        split="test",
+        epoch=best_epoch,      # you can leave this None since it's only at the end
+        cfg=cfg,
+        model_dir=best_model,
+        device=device,
+        data_set=test_ds,
+    ) 
+
+    run_training_plots(
+        run_dir=run_dir,
+        cfg=cfg,
+        history=history,     # no checkpoint read
+        ckpt_name=None,
+        show=False,
+    )
 
     print(f"[run] Done. best_val_loss={best_val_loss:.4e} at epoch {best_epoch} (time: {train_time})")
     return float(best_val_loss)

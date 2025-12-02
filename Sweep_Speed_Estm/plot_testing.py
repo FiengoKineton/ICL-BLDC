@@ -2,9 +2,20 @@
 """
 Evaluation / testing plots for zero-step Transformer runs.
 
-Usage example:
-    python plot_testing.py --dir runs/test_run
-    python plot_testing.py --dir sweeps/my_sweep_run --split val --n-exps 5
+Usage examples:
+    # From CLI (uses saved config + checkpoint)
+    python plot_testing.py --dir runs/test_run --split test --n-exps 5
+
+    # From training code (after training completes)
+    from plot_testing import run_testing
+    run_testing(
+        run_dir=run_dir,
+        split="test",
+        n_exps=5,
+        cfg=cfg,
+        model=model,
+        device=device,
+    )
 
 Contract:
   - --dir must contain:
@@ -20,14 +31,14 @@ import argparse
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import yaml, sys
+import yaml
 import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 
 from data_utils import load_datasets
-from run_experiment import build_device, build_model
+from engine_utils import build_device, build_model
 from dataset import reverse_normalization
 
 
@@ -71,6 +82,7 @@ def load_checkpoint_model(
     device,
     device_type: str,
     ckpt_name: str | None = None,
+    model_dir = None,
 ) -> nn.Module:
     """
     Build model from cfg and load weights from checkpoint.
@@ -78,26 +90,30 @@ def load_checkpoint_model(
     By default, uses "<checkpoint_stem>_best.pt" where checkpoint_stem
     is in cfg["logging"]["checkpoint_stem"] (default "test").
     """
-    cfg_logging = cfg.get("logging", {})
-    stem = cfg_logging.get("checkpoint_stem", "test")
-    if ckpt_name is None:
-        ckpt_name = f"{stem}_best.pt"
-
-    ckpt_path = run_dir / ckpt_name
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"Checkpoint {ckpt_path} not found.")
-
-    print(f"[test] Loading checkpoint: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location=device)
-
     model = build_model_from_cfg(cfg, device, device_type)
-    state_dict = ckpt.get("model", ckpt)
+
+    if model_dir is None:
+        cfg_logging = cfg.get("logging", {})
+        stem = cfg_logging.get("checkpoint_stem", "test")
+        if ckpt_name is None:
+            ckpt_name = f"{stem}_best.pt"
+
+        ckpt_path = run_dir / ckpt_name
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"Checkpoint {ckpt_path} not found.")
+
+        print(f"[test] Loading checkpoint: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device)
+        state_dict = ckpt.get("model", ckpt)
+    else: 
+        state_dict = model_dir
 
     if isinstance(model, nn.DataParallel):
         model.module.load_state_dict(state_dict)
     else:
         model.load_state_dict(state_dict)
 
+    model.to(device)
     model.eval()
     return model
 
@@ -105,14 +121,33 @@ def load_checkpoint_model(
 def prepare_datasets(cfg: Dict[str, Any]):
     """
     Reload datasets exactly as in train_zerostep.py via data_utils.load_datasets.
+
+    Supports both:
+      - load_datasets(...) -> (train_ds, val_ds)
+      - load_datasets(...) -> (train_ds, val_ds, test_ds)
+
+    Returns:
+        train_ds, val_ds, test_ds
     """
     cfg_data = cfg["data"]
-    train_ds, val_ds = load_datasets(cfg_data)
-    return train_ds, val_ds
+    result = load_datasets(cfg_data)
+
+    # Handle both 2-split and 3-split variants
+    if isinstance(result, tuple) and len(result) == 2:
+        train_ds, val_ds = result
+        test_ds = val_ds  # fallback: reuse val as test if no separate test split
+    elif isinstance(result, tuple) and len(result) == 3:
+        train_ds, val_ds, test_ds = result
+    else:
+        raise RuntimeError(
+            f"Unexpected result from load_datasets (expected 2 or 3 items, got {len(result)})"
+        )
+
+    return train_ds, val_ds, test_ds
 
 
 # ---------------------------------------------------------------------
-# Closed-loop ICL-style testing (sliding window, respects block_size)
+# Closed-loop ICL-style testing (sliding window, respects seq_len)
 # ---------------------------------------------------------------------
 
 
@@ -121,7 +156,7 @@ def run_model_on_experiment(
     ds,
     idx: int,
     device,
-):
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Exact single-experiment port of the old notebook logic.
 
@@ -139,25 +174,25 @@ def run_model_on_experiment(
         raise AttributeError("Dataset has no attribute 'seq_len'.")
     H = min(H, T)
 
-    # 2) Add fake batch dimension so shapes match the notebook
+    # 2) Add fake batch dimension
     df_len = 1
     u_full_all = u_full.unsqueeze(0)        # (1, T, 5)
     y_full_all = y_full.unsqueeze(0)        # (1, T, 1)
     y_pred_all = torch.zeros_like(y_full_all, device=device)  # (1, T, 1)
 
-    # 3) Same last_omega logic as notebook
+    # 3) Autoregressive omega logic
     last_omega = torch.zeros((df_len, H, 1), device=device)
 
     with torch.no_grad():
         for j in range(T):
             if j < H:
                 # (1, j+1, 5)
-                input_val = u_full_all[:, :j+1, :].clone()
+                input_val = u_full_all[:, : j + 1, :].clone()
                 # fill last_omega for the available j+1 steps
-                input_val[:, :j+1, 4] = last_omega[:, -j-1:, 0]
+                input_val[:, : j + 1, 4] = last_omega[:, -j - 1 :, 0]
             else:
                 # (1, H, 5)
-                input_val = u_full_all[:, j-H+1:j+1, :].clone()
+                input_val = u_full_all[:, j - H + 1 : j + 1, :].clone()
                 input_val[:, :, 4] = last_omega[:, :, 0]
 
             pred = model(input_val)[:, -1, :]          # (1,1)
@@ -166,7 +201,7 @@ def run_model_on_experiment(
             last_omega = torch.roll(last_omega, shifts=-1, dims=1)
             last_omega[:, -1, 0] = y_pred_all[:, j, 0]
 
-    # 4) Denormalize exactly as in the notebook
+    # 4) Denormalize exactly as in training utilities
     u_den, y_den, y_pred_den = reverse_normalization(
         u_full_all.cpu(), y_full_all.cpu(), y_pred_all.cpu()
     )
@@ -245,7 +280,123 @@ def plot_experiment_timeseries(
 
 
 # ---------------------------------------------------------------------
-# Main
+# Modular testing entry point
+# ---------------------------------------------------------------------
+
+
+def run_testing(
+    run_dir: Path | str,
+    split: str = "val",
+    n_exps: int = 10,
+    epoch: int | None = None,
+    cfg: Dict[str, Any] | None = None,
+    model_dir = None,
+    device=None,
+    ckpt_name: str | None = None,
+    data_set = None,
+):
+    """
+    General testing+plotting entry point.
+
+    Two usage modes:
+
+      1) From CLI:
+           - pass run_dir, split, n_exps, ckpt_name
+           - cfg/model/device are None
+           -> function loads cfg, builds device+model, loads checkpoint.
+
+      2) From training:
+           - pass run_dir, cfg, model, device, split, n_exps
+           - ckpt_name is ignored (model is already loaded)
+           -> function just plots using the in-memory model.
+
+    Plots are saved under:
+        <run_dir>/<plot.output_subdir>/testing[/epoch_xxxx]/<split>_experiment_XXX.<fmt>
+
+    For your use case (only at the end of training), just call once with epoch=None.
+    """
+    # Coerce run_dir to Path
+    run_dir = Path(run_dir)
+
+    # 1) Config
+    if cfg is None:
+        cfg = load_cfg_used(run_dir)
+
+    # 2) Device
+    if device is None:
+        cfg_compute = cfg["compute"]
+        device, device_type = build_device(cfg_compute)
+    else:
+        device_type = "cuda" if getattr(device, "type", "") == "cuda" else "cpu"
+
+    # 3) Model
+    model = load_checkpoint_model(
+        run_dir, cfg, device, device_type, ckpt_name=ckpt_name, model_dir=model_dir
+    )
+
+
+    # 4) Plot options
+    cfg_plot = cfg.get("plot", {})
+    dpi = int(cfg_plot.get("dpi", 160))
+    fmt = cfg_plot.get("fmt", "pdf")
+    output_subdir = cfg_plot.get("output_subdir", "plots")
+
+    outdir = run_dir / output_subdir / "testing"
+    # For your “only at end of training” use, epoch can stay None.
+    if epoch is not None:
+        outdir = outdir / f"BestRun_epoch{epoch:05d}"
+
+    # 5) Datasets
+    if data_set is None:
+        train_ds, val_ds, test_ds = prepare_datasets(cfg)
+        if split == "train":
+            ds = train_ds
+        elif split == "val":
+            ds = val_ds
+        elif split == "test":
+            ds = test_ds
+        else:
+            raise ValueError(f"Unknown split {split!r}, must be 'train', 'val', or 'test'.")
+    else: 
+        ds = data_set
+    
+    n_available = len(ds.dfs)
+    n_exps = min(n_exps, n_available)
+    if n_exps <= 0:
+        raise RuntimeError(
+            f"No experiments available in {split} dataset (len(dfs)={n_available})."
+        )
+
+    print(
+        f"[test] split={split}, epoch={epoch}, plotting {n_exps} experiments "
+        f"(out of {n_available}). Saving to {outdir}"
+    )
+
+    # 6) Loop over experiments
+    model.eval()
+    for idx in range(n_exps):
+        t, y_true, y_hat, u_den = run_model_on_experiment(model, ds, idx, device)
+
+        mse = float(np.mean((y_true - y_hat) ** 2))
+        rmse = float(np.sqrt(mse))
+        print(f"[test] exp {idx:03d}: MSE={mse:.4e}, RMSE={rmse:.4e}, T={len(t)}")
+
+        fname = plot_experiment_timeseries(
+            t,
+            y_true,
+            y_hat,
+            u_den,
+            outdir,
+            idx,
+            dpi,
+            fmt,
+            split=split,
+        )
+        print(f"[test]   -> saved {fname}")
+
+
+# ---------------------------------------------------------------------
+# CLI entry point
 # ---------------------------------------------------------------------
 
 
@@ -262,7 +413,7 @@ def main():
     parser.add_argument(
         "--split",
         type=str,
-        choices=["train", "val"],
+        choices=["train", "val", "test"],
         default="val",
         help="Which dataset split to use for experiments (default: val).",
     )
@@ -275,8 +426,9 @@ def main():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="test_best.pt",
-        help="Optional checkpoint filename inside --dir (default: '<stem>_best.pt').",
+        default=None,
+        help="Optional checkpoint filename inside --dir "
+             "(default: '<checkpoint_stem>_best.pt').",
     )
 
     args = parser.parse_args()
@@ -285,68 +437,23 @@ def main():
     if not run_dir.exists():
         raise FileNotFoundError(f"Run directory {run_dir} does not exist.")
 
-    # Load config_used.yaml
-    cfg = load_cfg_used(run_dir)
-
-    # Plot options
-    cfg_plot = cfg.get("plot", {})
-    dpi = int(cfg_plot.get("dpi", 160))
-    fmt = cfg_plot.get("fmt", "pdf")
-    output_subdir = cfg_plot.get("output_subdir", "plots")
-    outdir = run_dir / output_subdir / "testing"
-
-    # Device + model
-    cfg_compute = cfg["compute"]
-    device, device_type = build_device(cfg_compute)
-    model = load_checkpoint_model(
-        run_dir, cfg, device, device_type, ckpt_name=args.ckpt
+    # Use the modular function in "CLI mode":
+    # cfg/model/device are None, so it'll load everything itself.
+    run_testing(
+        run_dir=run_dir,
+        split=args.split,
+        n_exps=args.n_exps,
+        epoch=None,
+        cfg=None,
+        model=None,
+        device=None,
+        ckpt_name=args.ckpt,
+        data_set=None,
     )
-
-    # Datasets
-    train_ds, val_ds = prepare_datasets(cfg)
-    ds = train_ds if args.split == "train" else val_ds
-
-    # How many experiments are actually available
-    n_available = len(ds.dfs)
-    n_exps = min(args.n_exps, n_available)
-    if n_exps <= 0:
-        raise RuntimeError(
-            f"No experiments available in {args.split} dataset (len(dfs)={n_available})."
-        )
-
-    print(
-        f"[test] Using split={args.split}, plotting {n_exps} experiments (out of {n_available})."
-    )
-
-    # Loop over experiments
-    for idx in range(n_exps):
-        t, y_true, y_hat, u_den = run_model_on_experiment(model, ds, idx, device)
-
-        mask = np.isfinite(y_true) & np.isfinite(y_hat)
-        mse = float(np.mean((y_hat[mask] - y_true[mask]) ** 2)) if np.any(mask) else float(
-            "nan"
-        )
-        mse = float(((y_true - y_hat)**2).mean().item())
-        rmse = np.sqrt(mse)
-
-        print(f"[test] exp {idx:03d}: MSE={mse:.4e}, RMSE={rmse}, T={len(t)}")
-
-        fname = plot_experiment_timeseries(
-            t,
-            y_true,
-            y_hat,
-            u_den,
-            outdir,
-            idx,
-            dpi,
-            fmt,
-            split=args.split,
-        )
-        print(f"[test]   -> saved {fname}")
-
 
 
 if __name__ == "__main__":
+    # Example CLI:
     # >> python.exe .\plot_testing.py --dir runs/{name_run}
     # >> python.exe .\plot_testing.py --dir sweeps/{name_sweep}
     main()

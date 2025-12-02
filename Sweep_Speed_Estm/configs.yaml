@@ -1,7 +1,7 @@
 # configs/base.yaml
 
 experiment:
-  name: "test_run"
+  name: "temp"
   mode: "single"          # "single" or "sweep"
   output_root: "runs"     # out directory for single run
   output_sweep: "sweeps"

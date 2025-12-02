@@ -33,9 +33,8 @@ def load_datasets(cfg_data: Dict[str, Any]):
     """
     data_root = resolve_data_root(cfg_data)
 
-    train_folders: List[str] = cfg_data["train_folders"]
-    val_folders:   List[str] = cfg_data["val_folders"]
-    seq_len: int             = cfg_data["seq_len"]
+    folders: List[str] = cfg_data["folders"]
+    seq_len: int       = cfg_data["seq_len"]
 
     # Ratios for train / val / test: 7, 2, 1  (i.e. 0.7, 0.2, 0.1)
     r_train = cfg_data.get("train_ratio", 0.7)
@@ -50,7 +49,7 @@ def load_datasets(cfg_data: Dict[str, Any]):
 
     # Load all dataframes from the union of folders
     dfs_all: List[Any] = []
-    folders = sorted(set(train_folders + val_folders))
+    folders = sorted(set(folders)) #  train_folders + val_folders))
     for folder in folders:
         path = data_root / folder
         new_dfs = load_dataframes_from_folder(str(path))

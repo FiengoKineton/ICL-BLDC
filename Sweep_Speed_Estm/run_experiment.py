@@ -232,12 +232,13 @@ def run_single_experiment(
             break
 
     # Final checkpoint (loss trajectory etc)
+    train_time = time.time() - start_time
     final_ckpt = {
         "model": model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "model_args": model_args,
         "iter_num": epoch,
-        "train_time": time.time() - start_time,
+        "train_time": train_time,
         "history": history,
         "best_val_loss": best_val_loss,
         "cfg": cfg,
@@ -253,5 +254,5 @@ def run_single_experiment(
     with (run_dir / "config_used.yaml").open("w") as f:
         yaml.safe_dump(cfg, f)
 
-    print(f"[run] Done. best_val_loss={best_val_loss:.4e} at epoch {best_epoch}")
+    print(f"[run] Done. best_val_loss={best_val_loss:.4e} at epoch {best_epoch} (time: {train_time})")
     return float(best_val_loss)

@@ -55,3 +55,13 @@ sweep:
   n_embd:     [16, 32]
   lr:         [1.0e-4, 5.0e-5, 1.0e-5]
   batch_size: [64, 128]
+
+plot:
+  output_subdir: "plots"   # relative to run dir / sweep dir
+  show: false
+  logy: true
+  ma: 1
+  dpi: 160
+  export_csv: true
+  fmt: "pdf"
+

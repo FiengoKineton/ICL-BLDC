@@ -88,6 +88,7 @@ def run_single_experiment(
     cfg: Dict[str, Any],
     train_ds,
     val_ds,
+    test_ds,
     run_dir: Path,
 ) -> float:
     """
@@ -120,6 +121,8 @@ def run_single_experiment(
     cfg_training["lr_decay_iters"] = cfg_training["max_iters"]
     cfg_training["min_lr"] = cfg_training["lr"] / 10.0
     cfg_training["decay_lr"] = not cfg_training.get("fixed_lr", False)
+    smooth = cfg_training["smoothness"]
+    R_smooth = cfg_training["R"] if smooth else None
 
     # DataLoaders (dataset already prepared)
     train_dl = DataLoader(
@@ -130,6 +133,12 @@ def run_single_experiment(
     )
     val_dl = DataLoader(
         val_ds,
+        batch_size=cfg_training["eval_batch_size"],
+        pin_memory=True,
+        shuffle=True,
+    )
+    test_dl = DataLoader(
+        test_ds, 
         batch_size=cfg_training["eval_batch_size"],
         pin_memory=True,
         shuffle=True,
@@ -179,11 +188,9 @@ def run_single_experiment(
             lr_epoch = cfg_training["lr"]
         optimizer.param_groups[0]["lr"] = lr_epoch
 
-        # One epoch
-        train_loss = train(model, train_dl, criterion, optimizer, device)
 
-        # Evaluate every eval_interval
-        val_loss = validate(model, val_dl, criterion, device) #if (epoch % eval_interval) == 0 else np.nan
+        train_loss = train(model, train_dl, criterion, optimizer, device, R_smooth)
+        val_loss = validate(model, val_dl, criterion, device, R_smooth) if (epoch % eval_interval) == 0 else np.nan
 
 
         # Track

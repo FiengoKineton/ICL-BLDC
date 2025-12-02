@@ -20,13 +20,13 @@ def load_config(path: str) -> Dict[str, Any]:
 
 def run_single(cfg: Dict[str, Any]):
     # Datasets loaded once
-    train_ds, val_ds = load_datasets(cfg["data"])
+    train_ds, val_ds, test_ds = load_datasets(cfg["data"])
 
     exp_name = cfg["experiment"]["name"]
     root = Path(cfg["experiment"]["output_root"])
     run_dir = root / exp_name
 
-    best = run_single_experiment(cfg, train_ds, val_ds, run_dir)
+    best = run_single_experiment(cfg, train_ds, val_ds, test_ds, run_dir)
     print(f"[main] Single run finished, best_val_loss={best:.4e}")
 
 
@@ -42,7 +42,7 @@ def run_sweep(cfg: Dict[str, Any]):
 
     keys, values = zip(*sweep_def.items())
 
-    train_ds, val_ds = load_datasets(base_cfg["data"])
+    train_ds, val_ds, test_ds = load_datasets(base_cfg["data"])
 
     root = Path(base_cfg["experiment"]["output_sweep"])
     root.mkdir(parents=True, exist_ok=True)
@@ -70,7 +70,7 @@ def run_sweep(cfg: Dict[str, Any]):
 
         run_dir = root / name
         print(f"\n[main] Running sweep combo {i}: {name}")
-        best_val_loss = run_single_experiment(cfg_run, train_ds, val_ds, run_dir)
+        best_val_loss = run_single_experiment(cfg_run, train_ds, val_ds, test_ds, run_dir)
 
         row = {"name": name, "best_val_loss": best_val_loss}
         row.update(overrides)

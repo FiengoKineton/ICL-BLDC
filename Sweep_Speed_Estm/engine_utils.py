@@ -53,3 +53,19 @@ def build_model(cfg_model: Dict[str, Any],
         model = torch.compile(model)
 
     return model, model_args
+
+
+def configure_optimizer(model, cfg_training: Dict[str, Any], device_type: str):
+    if isinstance(model, nn.DataParallel):
+        optim_target = model.module
+    else:
+        optim_target = model
+
+    optimizer = optim_target.configure_optimizers(
+        cfg_training.get("weight_decay", 0.0),
+        cfg_training["lr"],
+        (0.9, 0.95),
+        device_type
+    )
+    return optimizer
+

@@ -1,10 +1,9 @@
-# data_utils.py
+# data_utils.py         | SET (leave it as it is)
+
 import random 
 
 from pathlib import Path
-from typing import Tuple, Dict, Any, List
-
-from torch.utils.data import DataLoader
+from typing import Dict, Any, List
 from dataset import Dataset, load_dataframes_from_folder
 
 
@@ -33,7 +32,7 @@ def load_datasets(cfg_data: Dict[str, Any]):
     """
     data_root = resolve_data_root(cfg_data)
 
-    folders: List[str] = cfg_data["folders"]
+    folders: List[str] = cfg_data["folders"]    # train_folders
     seq_len: int       = cfg_data["seq_len"]
 
     # Ratios for train / val / test: 7, 2, 1  (i.e. 0.7, 0.2, 0.1)

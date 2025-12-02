@@ -1,4 +1,5 @@
-# plot_training.py
+# plot_training.py      | SET (leave it as it is)
+
 """
 Config-driven training history plotting.
 
@@ -56,11 +57,9 @@ def load_cfg_used(run_dir: Path) -> Dict[str, Any]:
     cfg_path = run_dir / "config_used.yaml"
     if not cfg_path.exists():
         print(f"[warn] {cfg_path} not found. Proceeding with default plot settings.")
-        return {}
+        return None
     with cfg_path.open("r") as f:
         cfg = yaml.safe_load(f)
-    if cfg is None:
-        cfg = {}
     return cfg
 
 
@@ -82,6 +81,11 @@ def moving_average(x: np.ndarray, w: int) -> np.ndarray:
     return y
 
 
+def load_cfg_from_ckpt(path: Path): 
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    return ckpt.get("cfg", {})
+
+
 def load_losses_from_ckpt(path: Path) -> Dict[str, np.ndarray]:
     """
     Load train/val losses from a checkpoint saved by run_experiment.py.
@@ -97,6 +101,7 @@ def load_losses_from_ckpt(path: Path) -> Dict[str, np.ndarray]:
 
     # 1) Preferred: extract from history list
     hist = ckpt.get("history", None)
+    train_time = ckpt.get("train_time", None)
     if isinstance(hist, list) and len(hist) > 0:
         train = np.asarray(
             [row.get("train_loss", np.nan) for row in hist],
@@ -156,7 +161,7 @@ def load_losses_from_ckpt(path: Path) -> Dict[str, np.ndarray]:
             lr_arr = np.asarray([row.get("lr", np.nan) for row in hist], dtype=float)
             out["LR"] = lr_arr[:n]
 
-    return out
+    return out, train_time
 
 
 def build_losses_from_history(history: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
@@ -475,6 +480,7 @@ def run_training_plots(
     cfg: Dict[str, Any] | None = None,
     ckpt_name: str | None = "test_best.pt",
     history: List[Dict[str, Any]] | None = None,
+    train_time: float = None,
     label: str | None = None,
     show: bool | None = None,
 ):
@@ -509,6 +515,9 @@ def run_training_plots(
     # Config
     if cfg is None:
         cfg = load_cfg_used(run_dir)
+        if cfg is None:
+            ckpt_name = "test_best.pt"
+            cfg = load_cfg_from_ckpt(run_dir / ckpt_name)
     plot_cfg = cfg.get("plot", {})
 
     # plotting options
@@ -538,13 +547,11 @@ def run_training_plots(
         label_final = label or ckpt_path.stem
         print(f"[plot] Using in-memory history, label={label_final}")
     else:
-        if ckpt_name is None:
-            ckpt_name = "test_best.pt"
         ckpt_path = run_dir / ckpt_name
         print(f"[plot] Using run directory  : {run_dir}")
         print(f"[plot] Using checkpoint file: {ckpt_path}")
         try:
-            data = load_losses_from_ckpt(ckpt_path)
+            data, train_time = load_losses_from_ckpt(ckpt_path)
         except Exception as e:
             print(f"ERROR loading {ckpt_path}: {e}", file=sys.stderr)
             sys.exit(1)
@@ -641,6 +648,14 @@ def run_training_plots(
     )
     if f_et is not None:
         print(f"  - {f_et}")
+    
+    train_time = int(train_time)
+
+    days, rem = divmod(train_time, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+
+    print(f"\n\nTraining time: {days:2d}d {hours:2d}h {minutes:2d}m {seconds:2d}s\n\n")
 
 
 # ---------------------------------------------------------------------
@@ -661,7 +676,7 @@ def main():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="test_best.pt",
+        default="test_last.pt",
         help="Checkpoint filename inside the run directory (default: test_best.pt)",
     )
     parser.add_argument(
@@ -682,6 +697,7 @@ def main():
         cfg=None,
         ckpt_name=args.ckpt,
         history=None,
+        train_time=None,
         label=None,
         show=args.show,
     )

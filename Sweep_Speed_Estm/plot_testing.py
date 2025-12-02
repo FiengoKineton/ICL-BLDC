@@ -1,4 +1,5 @@
-# plot_testing.py
+# plot_testing.py       | SET (leave it as it is)
+   
 """
 Evaluation / testing plots for zero-step Transformer runs.
 
@@ -53,12 +54,15 @@ def load_cfg_used(run_dir: Path) -> Dict[str, Any]:
     """
     cfg_path = run_dir / "config_used.yaml"
     if not cfg_path.exists():
-        raise FileNotFoundError(
-            f"{cfg_path} not found. You must pass a run dir with config_used.yaml."
-        )
+        return None
     with cfg_path.open("r") as f:
         cfg = yaml.safe_load(f)
-    return cfg or {}
+    return cfg #or {}
+
+
+def load_cfg_from_ckpt(path: Path): 
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    return ckpt.get("cfg", {})
 
 
 def build_model_from_cfg(cfg: Dict[str, Any], device, device_type: str) -> nn.Module:
@@ -237,6 +241,10 @@ def plot_experiment_timeseries(
       - Top    : ω_real, ω_est (Transformer)
       - Middle : ia, ib
       - Bottom : va, vb
+
+    Additionally:
+      - Save a second figure with the speed error e_ω = ω_real - ω_est
+        and show the MSE in the legend.
     """
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -245,6 +253,9 @@ def plot_experiment_timeseries(
     va = u_den[:, 2]
     vb = u_den[:, 3]
 
+    # ------------------------------------------------------------------
+    # Main time–series plot
+    # ------------------------------------------------------------------
     fig, (ax0, ax1, ax2) = plt.subplots(
         3, 1, figsize=(10, 4), sharex=True
     )
@@ -276,6 +287,34 @@ def plot_experiment_timeseries(
     fname = outdir / f"{split}_experiment_{idx:03d}.{fmt}"
     fig.savefig(fname, dpi=dpi, format=fmt)
     plt.close(fig)
+
+    # ------------------------------------------------------------------
+    # Error plot (ω_real - ω_est) with MSE in the legend
+    # ------------------------------------------------------------------
+    err = y_true - y_hat
+    mse = float(np.mean(err**2))
+
+    fig_err, ax_err = plt.subplots(1, 1, figsize=(10, 3))
+
+    ax_err.plot(
+        t,
+        err,
+        linewidth=1.0,
+        label=rf"$e_\omega = \omega_\mathrm{{real}} - \omega_\mathrm{{est}}$"
+              rf"\ (MSE={mse:.3e})",
+    )
+    ax_err.set_ylabel(r"$e_\omega$ [rad/s]")
+    ax_err.set_xlabel("Sample")
+    ax_err.grid(True, alpha=0.3)
+    ax_err.legend(loc="upper right")
+
+    fig_err.tight_layout()
+
+    fname_err = outdir / f"{split}_experiment_{idx:03d}_error.{fmt}"
+    fig_err.savefig(fname_err, dpi=dpi, format=fmt)
+    plt.close(fig_err)
+
+    # Keep original return to avoid breaking callers
     return fname
 
 
@@ -287,7 +326,7 @@ def plot_experiment_timeseries(
 def run_testing(
     run_dir: Path | str,
     split: str = "val",
-    n_exps: int = 10,
+    n_exps: int = 5,
     epoch: int | None = None,
     cfg: Dict[str, Any] | None = None,
     model_dir = None,
@@ -321,7 +360,10 @@ def run_testing(
     # 1) Config
     if cfg is None:
         cfg = load_cfg_used(run_dir)
-
+        if cfg is None: 
+            ckpt_name = "test_best.pt"
+            cfg = load_cfg_from_ckpt(run_dir / ckpt_name)
+    
     # 2) Device
     if device is None:
         cfg_compute = cfg["compute"]
@@ -373,7 +415,7 @@ def run_testing(
     )
 
     # 6) Loop over experiments
-    model.eval()
+    #model.eval()
     for idx in range(n_exps):
         t, y_true, y_hat, u_den = run_model_on_experiment(model, ds, idx, device)
 
@@ -420,7 +462,7 @@ def main():
     parser.add_argument(
         "--n-exps",
         type=int,
-        default=10,
+        default=5,
         help="Number of experiments to plot from the chosen split.",
     )
     parser.add_argument(
@@ -445,7 +487,7 @@ def main():
         n_exps=args.n_exps,
         epoch=None,
         cfg=None,
-        model=None,
+        model_dir=None,
         device=None,
         ckpt_name=args.ckpt,
         data_set=None,

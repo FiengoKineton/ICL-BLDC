@@ -10,9 +10,7 @@ data:
   ny: 1
   project_root_marker: Sweep_Speed_Estm
   seq_len: 10
-  train_folders:
-  - simulated/50_percent_low_speed
-  val_folders:
+  folders:
   - simulated/50_percent_low_speed
 experiment:
   mode: single

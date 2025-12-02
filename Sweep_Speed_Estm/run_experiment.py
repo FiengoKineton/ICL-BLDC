@@ -1,38 +1,19 @@
 # run_experiment.py
 
-import time
+import time, torch, torch.nn as nn, numpy as np, pandas as pd
+
 from pathlib import Path
 from functools import partial
 from copy import deepcopy
 from typing import Dict, Any, List
-
-import torch
-import torch.nn as nn
-import numpy as np
-import pandas as pd
-
 from torch.utils.data import DataLoader
-from plot_testing import run_testing
-from temp import run_training_plots
+
 from transformer_zerostep import warmup_cosine_lr
 from engine import train, validate
-from engine_utils import build_device, build_model
+from engine_utils import build_device, build_model, configure_optimizer
+from plot_testing import run_testing
+from plot_training import run_training_plots
 
-
-
-def configure_optimizer(model, cfg_training: Dict[str, Any], device_type: str):
-    if isinstance(model, nn.DataParallel):
-        optim_target = model.module
-    else:
-        optim_target = model
-
-    optimizer = optim_target.configure_optimizers(
-        cfg_training.get("weight_decay", 0.0),
-        cfg_training["lr"],
-        (0.9, 0.95),
-        device_type
-    )
-    return optimizer
 
 
 def run_single_experiment(
@@ -220,6 +201,7 @@ def run_single_experiment(
         run_dir=run_dir,
         cfg=cfg,
         history=history,     # no checkpoint read
+        train_time=train_time,
         ckpt_name=None,
         show=False,
     )

@@ -64,6 +64,7 @@ sweep:
 plot:
   output_subdir: "plots"   # relative to run dir / sweep dir
   show: false
+  print: false
   logy: true
   ma: 1
   dpi: 160

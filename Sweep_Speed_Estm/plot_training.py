@@ -102,6 +102,8 @@ def load_losses_from_ckpt(path: Path) -> Dict[str, np.ndarray]:
     # 1) Preferred: extract from history list
     hist = ckpt.get("history", None)
     train_time = ckpt.get("train_time", None)
+    best_val_loss = ckpt.get("best_val_loss", None)
+
     if isinstance(hist, list) and len(hist) > 0:
         train = np.asarray(
             [row.get("train_loss", np.nan) for row in hist],
@@ -161,7 +163,7 @@ def load_losses_from_ckpt(path: Path) -> Dict[str, np.ndarray]:
             lr_arr = np.asarray([row.get("lr", np.nan) for row in hist], dtype=float)
             out["LR"] = lr_arr[:n]
 
-    return out, train_time
+    return out, train_time, best_val_loss
 
 
 def build_losses_from_history(history: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
@@ -253,7 +255,7 @@ def plot_losses(
     for label, data in series:
         all_boxes += [data["train"], data["val"]]
         labels += [f"{label} – train", f"{label} – val"]
-    ax2.boxplot(all_boxes, labels=labels, showmeans=True, meanline=True)
+    ax2.boxplot(all_boxes, tick_labels=labels, showmeans=True, meanline=True)
     ax2.set_ylabel("Loss")
     if logy:
         ax2.set_yscale("log")
@@ -481,6 +483,7 @@ def run_training_plots(
     ckpt_name: str | None = "test_best.pt",
     history: List[Dict[str, Any]] | None = None,
     train_time: float = None,
+    best_val_loss: float = None,
     label: str | None = None,
     show: bool | None = None,
 ):
@@ -537,23 +540,25 @@ def run_training_plots(
     # show override
     if show is None:
         show_flag = bool(plot_cfg.get("show", False))
+        print_flag = bool(plot_cfg.get("print", False))
     else:
         show_flag = bool(show)
+        print_flag = show_flag
 
     # Load losses
     if history is not None:
         data = build_losses_from_history(history)
         ckpt_path = run_dir / (ckpt_name or "from_history")
         label_final = label or ckpt_path.stem
-        print(f"[plot] Using in-memory history, label={label_final}")
+        if print_flag: print(f"[plot] Using in-memory history, label={label_final}")
     else:
         ckpt_path = run_dir / ckpt_name
-        print(f"[plot] Using run directory  : {run_dir}")
-        print(f"[plot] Using checkpoint file: {ckpt_path}")
+        if print_flag: print(f"[plot] Using run directory  : {run_dir}")
+        if print_flag: print(f"[plot] Using checkpoint file: {ckpt_path}")
         try:
-            data, train_time = load_losses_from_ckpt(ckpt_path)
+            data, train_time, best_val_loss = load_losses_from_ckpt(ckpt_path)
         except Exception as e:
-            print(f"ERROR loading {ckpt_path}: {e}", file=sys.stderr)
+            if print_flag: print(f"ERROR loading {ckpt_path}: {e}", file=sys.stderr)
             sys.exit(1)
         label_final = label or ckpt_path.stem
 
@@ -573,24 +578,24 @@ def run_training_plots(
         fmt=fmt,
         prefix=prefix,
     )
-    print(f"[OK] Saved figures:\n  - {f1}\n  - {f2}")
+    if print_flag: print(f"[OK] Saved figures:\n  - {f1}\n  - {f2}")
 
     # 2) Optional CSV export
     if export_csv_flag:
         csv_path = export_csv(series, outdir, prefix=prefix)
-        print(f"[OK] Saved CSV: {csv_path}")
+        if print_flag: print(f"[OK] Saved CSV: {csv_path}")
 
     # 3) Other diagnostics
     f_gap = plot_generalization_gap(series, outdir, logy=logy, dpi=dpi, fmt=fmt, prefix=prefix)
-    print(f"  - {f_gap}")
+    if print_flag: print(f"  - {f_gap}")
     f_runbest = plot_running_best_val(series, outdir, logy=logy, dpi=dpi, fmt=fmt, prefix=prefix)
-    print(f"  - {f_runbest}")
+    if print_flag: print(f"  - {f_runbest}")
     f_scatter = plot_train_vs_val_scatter(series, outdir, logxy=logy, dpi=dpi, fmt=fmt, prefix=prefix)
-    print(f"  - {f_scatter}")
+    if print_flag: print(f"  - {f_scatter}")
     f_dv = plot_val_improvement(series, outdir, percent=False, dpi=dpi, fmt=fmt, prefix=prefix)
-    print(f"  - {f_dv}")
+    if print_flag: print(f"  - {f_dv}")
     f_dv_pct = plot_val_improvement(series, outdir, percent=True, dpi=dpi, fmt=fmt, prefix=prefix)
-    print(f"  - {f_dv_pct}")
+    if print_flag: print(f"  - {f_dv_pct}")
 
     # 4) Optional curves if present in checkpoints/history
     f_lr = maybe_plot_optional_curves(
@@ -605,7 +610,7 @@ def run_training_plots(
         prefix=prefix,
     )
     if f_lr is not None:
-        print(f"  - {f_lr}")
+        if print_flag: print(f"  - {f_lr}")
 
     f_gn = maybe_plot_optional_curves(
         series,
@@ -619,7 +624,7 @@ def run_training_plots(
         prefix=prefix,
     )
     if f_gn is not None:
-        print(f"  - {f_gn}")
+        if print_flag: print(f"  - {f_gn}")
 
     f_pn = maybe_plot_optional_curves(
         series,
@@ -633,7 +638,7 @@ def run_training_plots(
         prefix=prefix,
     )
     if f_pn is not None:
-        print(f"  - {f_pn}")
+        if print_flag: print(f"  - {f_pn}")
 
     f_et = maybe_plot_optional_curves(
         series,
@@ -647,7 +652,7 @@ def run_training_plots(
         prefix=prefix,
     )
     if f_et is not None:
-        print(f"  - {f_et}")
+        if print_flag: print(f"  - {f_et}")
     
     train_time = int(train_time)
 
@@ -655,7 +660,12 @@ def run_training_plots(
     hours, rem = divmod(rem, 3600)
     minutes, seconds = divmod(rem, 60)
 
-    print(f"\n\nTraining time: {days:2d}d {hours:2d}h {minutes:2d}m {seconds:2d}s\n\n")
+
+    run_name = cfg["experiment"]["name"]
+    print(f"\n\n"
+          f"Run: {run_name}\n"
+          f"Best validation loss: {best_val_loss}\n"
+          f"Training time: {days:2d}d {hours:2d}h {minutes:2d}m {seconds:2d}s")
 
 
 # ---------------------------------------------------------------------

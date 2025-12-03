@@ -43,6 +43,7 @@ from engine_utils import build_device, build_model
 from dataset import reverse_normalization
 
 
+
 # ---------------------------------------------------------------------
 # Config & model loading
 # ---------------------------------------------------------------------
@@ -65,7 +66,7 @@ def load_cfg_from_ckpt(path: Path):
     return ckpt.get("cfg", {})
 
 
-def build_model_from_cfg(cfg: Dict[str, Any], device, device_type: str) -> nn.Module:
+def build_model_from_cfg(cfg: Dict[str, Any], device, device_type: str, print_flag: bool = False) -> nn.Module:
     """
     Rebuild the GPT model exactly as in run_experiment.py, using config_used.yaml.
     """
@@ -76,7 +77,7 @@ def build_model_from_cfg(cfg: Dict[str, Any], device, device_type: str) -> nn.Mo
     # Attach compile flag as in run_experiment
     cfg_model["compile"] = cfg_compute.get("compile", False)
 
-    model, _ = build_model(cfg_model, cfg_data, device, device_type)
+    model, _ = build_model(cfg_model, cfg_data, device, device_type, print_flag)
     return model
 
 
@@ -87,6 +88,7 @@ def load_checkpoint_model(
     device_type: str,
     ckpt_name: str | None = None,
     model_dir = None,
+    print_flag: bool = False,
 ) -> nn.Module:
     """
     Build model from cfg and load weights from checkpoint.
@@ -94,7 +96,7 @@ def load_checkpoint_model(
     By default, uses "<checkpoint_stem>_best.pt" where checkpoint_stem
     is in cfg["logging"]["checkpoint_stem"] (default "test").
     """
-    model = build_model_from_cfg(cfg, device, device_type)
+    model = build_model_from_cfg(cfg, device, device_type, print_flag)
 
     if model_dir is None:
         cfg_logging = cfg.get("logging", {})
@@ -106,7 +108,7 @@ def load_checkpoint_model(
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint {ckpt_path} not found.")
 
-        print(f"[test] Loading checkpoint: {ckpt_path}")
+        if print_flag: print(f"[test] Loading checkpoint: {ckpt_path}")
         ckpt = torch.load(ckpt_path, map_location=device)
         state_dict = ckpt.get("model", ckpt)
     else: 
@@ -233,6 +235,7 @@ def plot_experiment_timeseries(
     dpi: int,
     fmt: str,
     split: str,
+    show: bool = False,
 ) -> Path:
     """
     Plot one experiment's time series and save to disk.
@@ -286,7 +289,10 @@ def plot_experiment_timeseries(
 
     fname = outdir / f"{split}_experiment_{idx:03d}.{fmt}"
     fig.savefig(fname, dpi=dpi, format=fmt)
-    plt.close(fig)
+    if show: 
+        plt.show()
+    else: 
+        plt.close(fig)
 
     # ------------------------------------------------------------------
     # Error plot (ω_real - ω_est) with MSE in the legend
@@ -312,8 +318,11 @@ def plot_experiment_timeseries(
 
     fname_err = outdir / f"{split}_experiment_{idx:03d}_error.{fmt}"
     fig_err.savefig(fname_err, dpi=dpi, format=fmt)
-    plt.close(fig_err)
-
+    if show: 
+        plt.show()
+    else: 
+        plt.close(fig)
+    
     # Keep original return to avoid breaking callers
     return fname
 
@@ -333,6 +342,7 @@ def run_testing(
     device=None,
     ckpt_name: str | None = None,
     data_set = None,
+    show: bool = None,
 ):
     """
     General testing+plotting entry point.
@@ -363,18 +373,6 @@ def run_testing(
         if cfg is None: 
             ckpt_name = "test_best.pt"
             cfg = load_cfg_from_ckpt(run_dir / ckpt_name)
-    
-    # 2) Device
-    if device is None:
-        cfg_compute = cfg["compute"]
-        device, device_type = build_device(cfg_compute)
-    else:
-        device_type = "cuda" if getattr(device, "type", "") == "cuda" else "cpu"
-
-    # 3) Model
-    model = load_checkpoint_model(
-        run_dir, cfg, device, device_type, ckpt_name=ckpt_name, model_dir=model_dir
-    )
 
 
     # 4) Plot options
@@ -387,6 +385,27 @@ def run_testing(
     # For your “only at end of training” use, epoch can stay None.
     if epoch is not None:
         outdir = outdir / f"BestRun_epoch{epoch:05d}"
+
+    if show is None:
+        show_flag = bool(cfg_plot.get("show", False))
+        print_flag = bool(cfg_plot.get("print", False))
+    else:
+        show_flag = bool(show)
+        print_flag = show_flag
+
+    
+    # 2) Device
+    if device is None:
+        cfg_compute = cfg["compute"]
+        device, device_type = build_device(cfg_compute, print_flag)
+    else:
+        device_type = "cuda" if getattr(device, "type", "") == "cuda" else "cpu"
+
+    # 3) Model
+    model = load_checkpoint_model(
+        run_dir, cfg, device, device_type, ckpt_name=ckpt_name, model_dir=model_dir, print_flag=print_flag,
+    )
+
 
     # 5) Datasets
     if data_set is None:
@@ -409,7 +428,7 @@ def run_testing(
             f"No experiments available in {split} dataset (len(dfs)={n_available})."
         )
 
-    print(
+    if print_flag: print(
         f"[test] split={split}, epoch={epoch}, plotting {n_exps} experiments "
         f"(out of {n_available}). Saving to {outdir}"
     )
@@ -421,7 +440,7 @@ def run_testing(
 
         mse = float(np.mean((y_true - y_hat) ** 2))
         rmse = float(np.sqrt(mse))
-        print(f"[test] exp {idx:03d}: MSE={mse:.4e}, RMSE={rmse:.4e}, T={len(t)}")
+        if print_flag: print(f"[test] exp {idx:03d}: MSE={mse:.4e}, RMSE={rmse:.4e}, T={len(t)}")
 
         fname = plot_experiment_timeseries(
             t,
@@ -434,7 +453,7 @@ def run_testing(
             fmt,
             split=split,
         )
-        print(f"[test]   -> saved {fname}")
+        if print_flag: print(f"[test]   -> saved {fname}")
 
 
 # ---------------------------------------------------------------------
@@ -472,6 +491,12 @@ def main():
         help="Optional checkpoint filename inside --dir "
              "(default: '<checkpoint_stem>_best.pt').",
     )
+    parser.add_argument(
+        "--show",
+        type=bool,
+        default=False,
+        help="Showing plots.",
+    )
 
     args = parser.parse_args()
     run_dir = Path(args.dir)
@@ -491,6 +516,7 @@ def main():
         device=None,
         ckpt_name=args.ckpt,
         data_set=None,
+        show=args.show,
     )
 
 

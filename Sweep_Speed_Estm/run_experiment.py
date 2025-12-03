@@ -41,6 +41,7 @@ def run_single_experiment(
 
     # Slightly stupid thing: attach compile flag to model
     cfg_model["compile"] = cfg_compute.get("compile", False)
+    print_flag = bool(cfg.get("plot", {}).get("print", True))
 
     # Seed
     seed = cfg_exp.get("seed", 42)
@@ -73,7 +74,7 @@ def run_single_experiment(
     # Device + model
     device, device_type = build_device(cfg_compute)
     model, model_args = build_model(cfg_model, cfg_data, device, device_type)
-    optimizer = configure_optimizer(model, cfg_training, device_type)
+    optimizer = configure_optimizer(model, cfg_training, device_type, print_flag)
 
     # Criterion
     criterion = torch.nn.MSELoss()
@@ -87,8 +88,8 @@ def run_single_experiment(
         lr_decay_iters=cfg_training["lr_decay_iters"],
     )
 
-    print(f"[run] Running experiment in {run_dir}")
-    print(f"[run] seq_len={cfg_data['seq_len']}, "
+    if print_flag: print(f"[run] Running experiment in {run_dir}")
+    if print_flag: print(f"[run] seq_len={cfg_data['seq_len']}, "
           f"max_iters={cfg_training['max_iters']}, "
           f"batch_size={cfg_training['batch_size']}, "
           f"lr={cfg_training['lr']}, "
@@ -152,7 +153,7 @@ def run_single_experiment(
                 no_improve += 1
 
         if (epoch % max(1, cfg_training["eval_interval"])) == 0:
-            print(
+            if print_flag: print(
                 f"[epoch {epoch}] "
                 f"train={train_loss:.4e} val={val_loss:.4e} "
                 f"best={best_val_loss:.4e} (epoch={best_epoch}) "
@@ -160,7 +161,7 @@ def run_single_experiment(
             )
 
         if no_improve >= patience:
-            print(f"[early-stop] epoch {epoch}, patience={patience}")
+            if print_flag: print(f"[early-stop] epoch {epoch}, patience={patience}")
             break
 
     # Final checkpoint (loss trajectory etc)
@@ -202,6 +203,7 @@ def run_single_experiment(
         cfg=cfg,
         history=history,     # no checkpoint read
         train_time=train_time,
+        best_val_loss=best_val_loss,
         ckpt_name=None,
         show=False,
     )

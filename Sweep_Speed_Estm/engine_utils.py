@@ -1,9 +1,12 @@
+# engine_utils.py
+
 import torch, torch.nn as nn
 from transformer_zerostep import GPTConfig, GPT
 from typing import Dict, Any
 
 
-def build_device(cfg_compute: Dict[str, Any]):
+
+def build_device(cfg_compute: Dict[str, Any], print_flag: bool = True):
     torch.set_num_threads(cfg_compute.get("threads", 16))
 
     no_cuda = cfg_compute.get("no_cuda", False)
@@ -16,18 +19,22 @@ def build_device(cfg_compute: Dict[str, Any]):
 
     if device_type == "cuda":
         torch.cuda.set_device(device)
-        torch.set_float32_matmul_precision("high")
-        print(f"[device] CUDA available: {torch.cuda.is_available()}")
-        print(f"[device] Current device: {torch.cuda.current_device()}")
+        torch.backends.cuda.matmul.fp32_precision = "ieee"
+        torch.backends.cudnn.conv.fp32_precision = "ieee"
+        #torch.set_float32_matmul_precision("high")
 
-    print(f"[device] Using device: {device_name}")
+        if print_flag: print(f"[device] CUDA available: {torch.cuda.is_available()}")
+        if print_flag: print(f"[device] Current device: {torch.cuda.current_device()}")
+
+    if print_flag: print(f"[device] Using device: {device_name}")
     return device, device_type
 
 
 def build_model(cfg_model: Dict[str, Any],
                 cfg_data: Dict[str, Any],
                 device,
-                device_type: str):
+                device_type: str, 
+                print_flag: bool = True, ):
     model_args = dict(
         n_layer=cfg_model["n_layer"],
         n_head=cfg_model["n_head"],
@@ -41,10 +48,10 @@ def build_model(cfg_model: Dict[str, Any],
     )
 
     gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
+    model = GPT(gptconf, print_flag)
 
     if torch.cuda.device_count() > 1 and device_type == "cuda":
-        print("[model] Using DataParallel on all GPUs")
+        if print_flag: print("[model] Using DataParallel on all GPUs")
         model = nn.DataParallel(model)
 
     model.to(device)
@@ -55,7 +62,7 @@ def build_model(cfg_model: Dict[str, Any],
     return model, model_args
 
 
-def configure_optimizer(model, cfg_training: Dict[str, Any], device_type: str):
+def configure_optimizer(model, cfg_training: Dict[str, Any], device_type: str, print_flag: bool):
     if isinstance(model, nn.DataParallel):
         optim_target = model.module
     else:
@@ -65,7 +72,8 @@ def configure_optimizer(model, cfg_training: Dict[str, Any], device_type: str):
         cfg_training.get("weight_decay", 0.0),
         cfg_training["lr"],
         (0.9, 0.95),
-        device_type
+        device_type, 
+        print_flag=print_flag,
     )
     return optimizer
 

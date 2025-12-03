@@ -22,7 +22,7 @@ def resolve_data_root(cfg_data: Dict[str, Any]) -> Path:
     return project_root / cfg_data.get("data_subdir", "data")
 
 
-def load_datasets(cfg_data: Dict[str, Any]):
+def load_datasets(cfg_data: Dict[str, Any], print_flag: bool = False):
     """
     Reads all DataFrames once and splits into train / val / test.
     Split is done at the file level using a 7:2:1 ratio by default.
@@ -32,8 +32,11 @@ def load_datasets(cfg_data: Dict[str, Any]):
     """
     data_root = resolve_data_root(cfg_data)
 
-    folders: List[str] = cfg_data["folders"]    # train_folders
-    seq_len: int       = cfg_data["seq_len"]
+    try: 
+        folders: List[str]  = cfg_data["folders"]
+    except Exception as e: 
+        folders: List[str]  = cfg_data["train_folders"]
+    seq_len: int            = cfg_data["seq_len"]
 
     # Ratios for train / val / test: 7, 2, 1  (i.e. 0.7, 0.2, 0.1)
     r_train = cfg_data.get("train_ratio", 0.7)
@@ -53,7 +56,7 @@ def load_datasets(cfg_data: Dict[str, Any]):
         path = data_root / folder
         new_dfs = load_dataframes_from_folder(str(path))
         dfs_all += new_dfs
-        print(f"[data] Loaded {len(new_dfs)} DataFrames from {path}")
+        if print_flag: print(f"[data] Loaded {len(new_dfs)} DataFrames from {path}")
 
     if not dfs_all:
         raise RuntimeError("[data] No CSV files found in the specified folders")
@@ -79,7 +82,7 @@ def load_datasets(cfg_data: Dict[str, Any]):
     dfs_val   = dfs_all[n_train:n_train + n_val]
     dfs_test  = dfs_all[n_train + n_val:]
 
-    print(f"[data] Split {n_total} DataFrames into "
+    if print_flag: print(f"[data] Split {n_total} DataFrames into "
           f"{len(dfs_train)} train, {len(dfs_val)} val, {len(dfs_test)} test.")
 
     train_ds = Dataset(dfs=dfs_train, seq_len=seq_len)

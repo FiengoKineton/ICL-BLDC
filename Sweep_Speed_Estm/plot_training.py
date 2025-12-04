@@ -715,5 +715,5 @@ def main():
 
 if __name__ == "__main__":
     # >> python.exe .\plot_training.py --dir runs/{name_run}
-    # >> python.exe .\plot_training.py --dir sweeps/{name_sweep}
+    # >> python.exe .\plot_training.py --dir runs/sweeps/{name_sweep}
     main()

@@ -1,8 +1,9 @@
 # engine.py
 
-import torch
-import matplotlib.pyplot as plt
-from pathlib import Path
+import torch, numpy as np
+from typing import Optional, Tuple
+from dataset import reverse_normalization
+
 
 def train(model, dataloader, criterion, optimizer, device, R_smooth: float = None):
     '''
@@ -147,3 +148,93 @@ def validate(model, dataloader, criterion, device, R_smooth: float = None):
             running_loss += loss.item()
 
     return running_loss / len(dataloader)
+
+def test(
+    model,
+    dataloader,
+    device: torch.device,
+    dt: Optional[float] = None,
+): # -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Run test (evaluation) with the same recursive structure used in training.
+
+    Returns
+    -------
+    t : (T,) tensor
+        Time vector. If dt is provided, t = [0, dt, 2*dt, ..., (T-1)*dt].
+        Otherwise t = [0, 1, ..., T-1].
+    u_true : (N, T, n_u) tensor
+        True input sequences (concatenated over all batches).
+    y_true : (N, T, 1) tensor
+        True output sequences.
+    y_pred : (N, T, 1) tensor
+        Predicted output sequences from the model, using recursive injection.
+    """
+    model.eval()
+
+    all_u_true = []
+    all_y_true = []
+    all_y_pred = []
+
+    with torch.no_grad():
+        for batch in dataloader:
+            batch_u, batch_y = batch
+            batch_u = batch_u.to(device)
+            batch_y = batch_y.to(device)
+
+            # Copy and zero velocity channel (index 4), same as in training
+            batch_u_copy = batch_u.clone()
+            batch_u_copy[:, :, 4] = 0.0
+
+            B, T, _ = batch_u_copy.shape
+
+            # Initialize ω̂_0 = 0 for all sequences in the batch
+            last_predictions = torch.zeros(B, device=device)
+            batch_y_pred_list = []
+
+            # Simulate step by step (teacher-free)
+            for t_step in range(T):
+                # Inject previous estimate into channel 4 at time t_step
+                batch_u_step = batch_u_copy.clone()
+                batch_u_step[:, t_step, 4] = last_predictions
+
+                # Prefix up to current time
+                batch_u_tmp = batch_u_step[:, :t_step + 1, :]
+
+                # Forward pass, take last time step
+                last_predictions = model(batch_u_tmp)[:, -1, :].view(-1)
+                batch_y_pred_list.append(last_predictions.unsqueeze(1))
+
+            # Concatenate predictions along time dimension and add output dim
+            batch_y_pred = torch.cat(batch_y_pred_list, dim=1).unsqueeze(-1)  # (B, T, 1)
+
+            all_u_true.append(batch_u)
+            all_y_true.append(batch_y)
+            all_y_pred.append(batch_y_pred)
+
+    # Concatenate over batches
+    u_true = torch.cat(all_u_true, dim=0)   # (N, T, n_u)
+    y_true = torch.cat(all_y_true, dim=0)   # (N, T, 1)
+    y_pred = torch.cat(all_y_pred, dim=0)   # (N, T, 1)
+
+
+    u_true, y_true, y_pred = reverse_normalization(
+        u_true, y_true, y_pred
+    )
+
+
+    # Shapes
+    N, T, n_u = u_true.shape
+
+    base_dt = 1.0 if dt is None else dt
+    t_flat = (torch.arange(N * T, device=u_true.device) * base_dt).cpu().numpy()
+
+    # Remove trailing dim=1 from y if present, then flatten
+    y_true_flat = y_true.view(N, T, -1).squeeze(-1).reshape(-1).cpu().numpy()  # (N*T,)
+    y_pred_flat = y_pred.view(N, T, -1).squeeze(-1).reshape(-1).cpu().numpy()  # (N*T,)
+
+    # Inputs: (N, T, n_u) -> (N*T, n_u)
+    u_flat = u_true.reshape(N * T, n_u).cpu().numpy()  # (N*T, n_u)
+
+    return t_flat, y_true_flat, y_pred_flat, u_flat
+

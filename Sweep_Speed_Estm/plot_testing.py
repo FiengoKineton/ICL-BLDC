@@ -32,15 +32,17 @@ import argparse
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import yaml
+import yaml, sys
 import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader
 
 from data_utils import load_datasets
 from engine_utils import build_device, build_model
 from dataset import reverse_normalization
+from engine import test
 
 
 
@@ -236,6 +238,8 @@ def plot_experiment_timeseries(
     fmt: str,
     split: str,
     show: bool = False,
+    min_T: int = 0,
+    max_T: int = None,
 ) -> Path:
     """
     Plot one experiment's time series and save to disk.
@@ -256,6 +260,21 @@ def plot_experiment_timeseries(
     va = u_den[:, 2]
     vb = u_den[:, 3]
 
+    if max_T is not None:
+        n = len(t)              # total number of samples
+        start = min_T
+        end   = min_T + max_T   # desired exclusive end index
+
+        if end <= n:
+            # Enough points: apply the crop
+            t      = t[start:end]
+            y_true = y_true[start:end]
+            y_hat  = y_hat[start:end]
+            ia     = ia[start:end]
+            ib     = ib[start:end]
+            va     = va[start:end]
+            vb     = vb[start:end]
+    
     # ------------------------------------------------------------------
     # Main time–series plot
     # ------------------------------------------------------------------
@@ -434,24 +453,33 @@ def run_testing(
     )
 
     # 6) Loop over experiments
-    #model.eval()
+    dl = DataLoader(
+        ds, 
+        batch_size=cfg["training"]["batch_size"],
+        pin_memory=True,
+        shuffle=True,
+    )
+
     for idx in range(n_exps):
         t, y_true, y_hat, u_den = run_model_on_experiment(model, ds, idx, device)
+        #t, y_true, y_hat, u_den = test(model, dl, device)
 
         mse = float(np.mean((y_true - y_hat) ** 2))
         rmse = float(np.sqrt(mse))
         if print_flag: print(f"[test] exp {idx:03d}: MSE={mse:.4e}, RMSE={rmse:.4e}, T={len(t)}")
 
         fname = plot_experiment_timeseries(
-            t,
-            y_true,
-            y_hat,
-            u_den,
-            outdir,
-            idx,
-            dpi,
-            fmt,
+            t=t,
+            y_true=y_true,
+            y_hat=y_hat,
+            u_den=u_den,
+            outdir=outdir,
+            idx=idx,
+            dpi=dpi,
+            fmt=fmt,
             split=split,
+            min_T=cfg.get("plotting", {}).get("min_T", 0),
+            max_T=cfg.get("plotting", {}).get("max_T", 501),
         )
         if print_flag: print(f"[test]   -> saved {fname}")
 

@@ -8,9 +8,8 @@ from copy import deepcopy
 from typing import Dict, Any, List
 from torch.utils.data import DataLoader
 
-from transformer_zerostep import warmup_cosine_lr
 from engine import train, validate
-from engine_utils import build_device, build_model, configure_optimizer
+from engine_utils import build_device, build_model, configure_optimizer, warmup_cosine_lr
 from plot_testing import run_testing
 from plot_training import run_training_plots
 

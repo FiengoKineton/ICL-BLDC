@@ -1,6 +1,6 @@
 # engine_utils.py
 
-import torch, torch.nn as nn
+import math, torch, torch.nn as nn
 from transformer_zerostep import GPTConfig, GPT
 from typing import Dict, Any
 
@@ -77,3 +77,22 @@ def configure_optimizer(model, cfg_training: Dict[str, Any], device_type: str, p
     )
     return optimizer
 
+
+def warmup_cosine_lr(iter, lr, min_lr, warmup_iters, lr_decay_iters):
+    # LR schedule:
+    # 1) Warmup: lr * (iter / warmup_iters), for iter < warmup_iters
+    # 2) Cosine decay from lr → min_lr over [warmup_iters, lr_decay_iters]
+    #    lr(iter) = min_lr + 0.5*(lr - min_lr)*(1 + cos(pi * progress))
+    # 3) Clamp to min_lr after lr_decay_iters
+
+    # 1) linear warmup for warmup_iters steps
+    if iter < warmup_iters:
+        return lr * iter / warmup_iters
+    # 2) if it > lr_decay_iters, return min learning rate
+    if iter > lr_decay_iters:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (iter - warmup_iters) / (lr_decay_iters - warmup_iters)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+    return min_lr + coeff * (lr - min_lr)

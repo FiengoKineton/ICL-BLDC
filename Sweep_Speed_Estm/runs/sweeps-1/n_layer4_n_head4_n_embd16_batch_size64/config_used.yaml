@@ -1,0 +1,55 @@
+compute:
+  compile: false
+  cuda_device: cuda:0
+  no_cuda: false
+  threads: 16
+data:
+  data_subdir: data
+  nu: 5
+  nx: 4
+  ny: 1
+  project_root_marker: Sweep_Speed_Estm
+  seq_len: 10
+  train_folders:
+  - simulated/50_percent_low_speed
+  val_folders:
+  - simulated/50_percent_low_speed
+experiment:
+  mode: sweep
+  name: n_layer4_n_head4_n_embd16_batch_size64
+  output_root: runs
+  output_sweep: sweeps
+  seed: 42
+logging:
+  checkpoint_stem: test
+  init_from: scratch
+  model_dir: out
+model:
+  bias: false
+  dropout: 0.0
+  n_embd: 16
+  n_head: 4
+  n_layer: 4
+sweep:
+  batch_size:
+  - 64
+  n_embd:
+  - 16
+  - 32
+  n_head:
+  - 2
+  - 4
+  - 8
+  n_layer:
+  - 4
+  - 8
+training:
+  batch_size: 64
+  eval_interval: 1
+  eval_iters: 1
+  fixed_lr: false
+  lr: 1.0e-05
+  max_iters: 10000
+  patience: 10000
+  warmup_iters: 5000
+  weight_decay: 0.0

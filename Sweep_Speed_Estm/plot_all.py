@@ -10,7 +10,7 @@ def run_plots_for_all_sweeps(print_flag: bool = False) -> None:
       - python plot_training.py --dir runs/sweeps/{name_sweep}
     """
     repo_root = Path(__file__).resolve().parent
-    sweeps_root = repo_root / "runs" / "sweeps"
+    sweeps_root = repo_root / "runs" / "sweeps-1"
 
     if not sweeps_root.exists():
         raise FileNotFoundError(f"sweeps root not found: {sweeps_root}")
@@ -47,3 +47,4 @@ def run_plots_for_all_sweeps(print_flag: bool = False) -> None:
 if __name__ == "__main__":
     run_plots_for_all_sweeps(False)
 
+# 0.00069473 — n_layer8_n_head2_n_embd32_batch_size64 (not finished)

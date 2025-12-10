@@ -7,6 +7,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=24G
 #SBATCH --partition=gpu-light
+#SBATCH --gpus=1
 
 module purge
 module load cuda/12.1

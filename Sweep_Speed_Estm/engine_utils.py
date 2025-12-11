@@ -25,6 +25,8 @@ def build_device(cfg_compute: Dict[str, Any], print_flag: bool = True):
 
         if print_flag: print(f"[device] CUDA available: {torch.cuda.is_available()}")
         if print_flag: print(f"[device] Current device: {torch.cuda.current_device()}")
+    else: 
+        raise Warning("Running on CPU. This will be slow!")
 
     if print_flag: print(f"[device] Using device: {device_name}")
     return device, device_type
@@ -45,6 +47,7 @@ def build_model(cfg_model: Dict[str, Any],
         block_size=cfg_data["seq_len"],
         bias=cfg_model.get("bias", False),
         dropout=cfg_model.get("dropout", 0.0),
+        activation_function=cfg_model.get("activation_function", "gelu"),
     )
 
     gptconf = GPTConfig(**model_args)

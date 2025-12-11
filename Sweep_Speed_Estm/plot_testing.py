@@ -121,8 +121,8 @@ def load_checkpoint_model(
     else:
         model.load_state_dict(state_dict)
 
-    model.to(device)
-    model.eval()
+    #model.to(device)
+    #model.eval()
     return model
 
 
@@ -171,6 +171,9 @@ def run_model_on_experiment(
     Returns:
         t, y_true_den, y_hat_den, u_den  (all numpy)
     """
+    model.to(device)
+    model.eval()
+
     # 1) Get full normalized experiment
     u_full, y_full = ds.get_full_experiment(idx)   # (T,5), (T,1)
     u_full = u_full.to(device)
@@ -453,6 +456,7 @@ def run_testing(
     )
 
     # 6) Loop over experiments
+    regression_mode = cfg.get("training", {}).get("regression_mode", "time_last")
     dl = DataLoader(
         ds, 
         batch_size=cfg["training"]["batch_size"],
@@ -461,8 +465,8 @@ def run_testing(
     )
 
     for idx in range(n_exps):
-        t, y_true, y_hat, u_den = run_model_on_experiment(model, ds, idx, device)
-        #t, y_true, y_hat, u_den = test(model, dl, device)
+        #t, y_true, y_hat, u_den = run_model_on_experiment(model, ds, idx, device)
+        t, y_true, y_hat, u_den = test(model, dl, device, regression_mode=regression_mode)
 
         mse = float(np.mean((y_true - y_hat) ** 2))
         rmse = float(np.sqrt(mse))

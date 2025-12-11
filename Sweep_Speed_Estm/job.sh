@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=icl_gpu_test
+#SBATCH --job-name=icl_bldc_test
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --time=2-00:00:00
@@ -17,3 +17,20 @@ cd /home/giuseppe_fiengo/Sweep_Speed_Estm
 mkdir -p logs
 
 python3 train_zerostep.py
+
+
+
+"""
+>> squeue                       (lista dei job attivi)
+
+>> sbatch job.sh                (in the same directory)
+
+>> sinfo                        (stato dei nodi)
+
+>> scontrol show job ####       (job details)
+
+>> scancel ####                 (cancel job)
+
+
+https://stackoverflow.com/questions/16886179/scp-or-sftp-copy-multiple-files-with-single-command
+"""

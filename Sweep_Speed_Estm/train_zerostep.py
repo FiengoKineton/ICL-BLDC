@@ -27,7 +27,7 @@ def run_single(cfg: Dict[str, Any]):
     run_dir = root / exp_name
 
     best = run_single_experiment(cfg, train_ds, val_ds, test_ds, run_dir)
-    print(f"[main] Single run finished, best_val_loss={best:.4e}")
+    print(f"[main] Single run finished, best_val_loss={best:.4e}\n")
 
 
 def run_sweep(cfg: Dict[str, Any]):
@@ -69,7 +69,7 @@ def run_sweep(cfg: Dict[str, Any]):
                 cfg_run["training"][k] = v
 
         run_dir = root / name
-        print(f"\n[main] Running sweep combo {i}: {name}")
+        print(f"[main] Running sweep combo {i}: {name}\n")
         best_val_loss = run_single_experiment(cfg_run, train_ds, val_ds, test_ds, run_dir)
 
         row = {"name": name, "best_val_loss": best_val_loss}

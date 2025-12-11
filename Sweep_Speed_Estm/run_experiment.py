@@ -55,6 +55,7 @@ def run_single_experiment(
     cfg_training["decay_lr"] = not cfg_training.get("fixed_lr", False)
     smooth = cfg_training["smoothness"]
     R_smooth = cfg_training["R"] if smooth else None
+    regression_mode = cfg_training.get("regression_mode", "time_last")
 
     # DataLoaders (dataset already prepared)
     train_dl = DataLoader(
@@ -71,12 +72,16 @@ def run_single_experiment(
     )
 
     # Device + model
-    device, device_type = build_device(cfg_compute)
-    model, model_args = build_model(cfg_model, cfg_data, device, device_type)
+    if regression_mode == "one_step":
+        cfg_data["nu"] = cfg_data["nu"] - 1
+
+    device, device_type = build_device(cfg_compute, print_flag)
+    model, model_args = build_model(cfg_model, cfg_data, device, device_type, print_flag)
     optimizer = configure_optimizer(model, cfg_training, device_type, print_flag)
 
     # Criterion
     criterion = torch.nn.MSELoss()
+    num_params = model.get_num_params()
 
     # LR schedule
     get_lr = partial(
@@ -115,8 +120,8 @@ def run_single_experiment(
         optimizer.param_groups[0]["lr"] = lr_epoch
 
 
-        train_loss = train(model, train_dl, criterion, optimizer, device, R_smooth)
-        val_loss = validate(model, val_dl, criterion, device, R_smooth) if (epoch % eval_interval) == 0 else np.nan
+        train_loss = train(model, train_dl, criterion, optimizer, device, R_smooth, regression_mode)
+        val_loss = validate(model, val_dl, criterion, device, R_smooth, regression_mode) if (epoch % eval_interval) == 0 else np.nan
 
 
         # Track
@@ -146,12 +151,14 @@ def run_single_experiment(
                     "history": history,
                     "best_val_loss": best_val_loss,
                     "cfg": cfg,
+                    "num_params": num_params,
+                    "device_type": device_type,
                 }
                 torch.save(checkpoint, run_dir / f"{cfg_logging['checkpoint_stem']}_best.pt")
             else:
                 no_improve += 1
 
-        if (epoch % max(1, cfg_training["eval_interval"])) == 0:
+        if (epoch % max(1, eval_interval)) == 0:
             if print_flag: print(
                 f"[epoch {epoch}] "
                 f"train={train_loss:.4e} val={val_loss:.4e} "
@@ -174,6 +181,8 @@ def run_single_experiment(
         "history": history,
         "best_val_loss": best_val_loss,
         "cfg": cfg,
+        "num_params": num_params,
+        "device_type": device_type,
     }
     torch.save(final_ckpt, run_dir / f"{cfg_logging['checkpoint_stem']}_last.pt")
 
@@ -203,9 +212,11 @@ def run_single_experiment(
         history=history,     # no checkpoint read
         train_time=train_time,
         best_val_loss=best_val_loss,
+        num_params=num_params,
+        device_type=device_type,
         ckpt_name=None,
         show=False,
     )
 
-    print(f"[run] Done. best_val_loss={best_val_loss:.4e} at epoch {best_epoch} (time: {train_time})")
+    print(f"\n\n[run] Done. best_val_loss={best_val_loss:.4e} at epoch {best_epoch} (time: {train_time})")
     return float(best_val_loss)

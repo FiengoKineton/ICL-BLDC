@@ -2,8 +2,8 @@
 
 experiment:
   name: "temp"
-  mode: "single"          # "single" or "sweep"
-  output_root: "runs"     # out directory for single run
+  mode: "single"                            # "single" or "sweep"
+  output_root: "runs"                       # out directory for single run
   output_sweep: "sweeps"
   seed: 42
 
@@ -28,19 +28,21 @@ model:
   n_embd: 16
   dropout: 0.0
   bias: false
+  activation_function: "silu"               # "gelu" as default | "relu", "silu"
 
 training:
   batch_size: 128
-  max_iters: 10000
+  max_iters: 2 #10000
   lr: 1.0e-5
   warmup_iters: 5000
   weight_decay: 0.0
   eval_interval: 1 #0
   eval_iters: 1 #0
   patience: 10000
-  fixed_lr: false
-  smoothness: true
-  R: 0.5
+  fixed_lr: false        
+  smoothness: true                          # False as default
+  R: 0.5                                    # regularization weight | to tune
+  regression_mode: "time_full"              # "time_last" as default | "time_full", "one_step"
 
 compute:
   threads: 16
@@ -50,19 +52,18 @@ compute:
 
 logging:
   checkpoint_stem: "test"
-  init_from: "scratch"   # scratch | resume | pretrained
-  model_dir: "out"       # not really needed if you use run-specific dirs
+  init_from: "scratch"                      # scratch | resume | pretrained
+  model_dir: "out"                          # not really needed if you use run-specific dirs
 
-# Optional: sweep definition lives in a separate file or here.
 sweep:
   n_layer:    [4, 8]
-  n_head:     [2, 4, 8]      # sottomultiple di embd
+  n_head:     [2, 4, 8]                     # sottomultiple di embd
   n_embd:     [16, 32]
   lr:         [1.0e-4, 5.0e-5, 1.0e-5]
   batch_size: [64, 128]
 
 plot:
-  output_subdir: "plots"   # relative to run dir / sweep dir
+  output_subdir: "plots"                    # relative to run dir / sweep dir
   show: false
   print: false
   logy: true
@@ -70,6 +71,6 @@ plot:
   dpi: 160
   export_csv: true
   fmt: "pdf"
-  min_T: 1000               # 0 if you want to start from t=0
-  max_T: 501                # None is you want to plot the entire lenght
+  min_T: 1000                               # 0 if you want to start from t=0
+  max_T: 501                                # None is you want to plot the entire lenght
 

@@ -102,7 +102,9 @@ def load_losses_from_ckpt(path: Path) -> Dict[str, np.ndarray]:
     # 1) Preferred: extract from history list
     hist = ckpt.get("history", None)
     train_time = ckpt.get("train_time", None)
+    num_params = ckpt.get("num_params", None)
     best_val_loss = ckpt.get("best_val_loss", None)
+    device_type = ckpt.get("device_type", None)
 
     if isinstance(hist, list) and len(hist) > 0:
         train = np.asarray(
@@ -163,7 +165,7 @@ def load_losses_from_ckpt(path: Path) -> Dict[str, np.ndarray]:
             lr_arr = np.asarray([row.get("lr", np.nan) for row in hist], dtype=float)
             out["LR"] = lr_arr[:n]
 
-    return out, train_time, best_val_loss
+    return out, train_time, best_val_loss, num_params, device_type
 
 
 def build_losses_from_history(history: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
@@ -484,6 +486,8 @@ def run_training_plots(
     history: List[Dict[str, Any]] | None = None,
     train_time: float = None,
     best_val_loss: float = None,
+    num_params: int = None,
+    device_type: str = None,
     label: str | None = None,
     show: bool | None = None,
 ):
@@ -556,7 +560,8 @@ def run_training_plots(
         if print_flag: print(f"[plot] Using run directory  : {run_dir}")
         if print_flag: print(f"[plot] Using checkpoint file: {ckpt_path}")
         try:
-            data, train_time, best_val_loss = load_losses_from_ckpt(ckpt_path)
+            data, train_time, best_val_loss, num_params, device_type = \
+                  load_losses_from_ckpt(ckpt_path)
         except Exception as e:
             if print_flag: print(f"ERROR loading {ckpt_path}: {e}", file=sys.stderr)
             sys.exit(1)
@@ -665,6 +670,8 @@ def run_training_plots(
     print(f"\n\n"
           f"Run: {run_name}\n"
           f"Best validation loss: {best_val_loss}\n"
+          f"Number of parameters: {num_params}\n"
+          f"Device type: {device_type}\n"
           f"Training time: {days:2d}d {hours:2d}h {minutes:2d}m {seconds:2d}s")
 
 

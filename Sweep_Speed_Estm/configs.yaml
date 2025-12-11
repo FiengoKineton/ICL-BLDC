@@ -2,13 +2,13 @@
 
 experiment:
   name: "temp"
-  mode: "single"                            # "single" or "sweep"
-  output_root: "runs"                       # out directory for single run
+  mode: "single"                                    # "single" or "sweep"
+  output_root: "runs"                               # out directory for single run
   output_sweep: "sweeps"
   seed: 42
 
 data:
-  project_root_marker: "Sweep_Speed_Estm"   # used to split cwd
+  project_root_marker: "Sweep_Speed_Estm"           # used to split cwd
   data_subdir: "data"
   seq_len: 10
   nx: 4
@@ -24,25 +24,25 @@ data:
 
 model:
   n_layer: 8
-  n_head: 4
-  n_embd: 16
+  n_head: 8                                         # 4 as default | sottomultiple di embd
+  n_embd: 32                                        # 16 as default
   dropout: 0.0
   bias: false
-  activation_function: "silu"               # "gelu" as default | "relu", "silu"
+  activation_function: "silu"                       # "gelu" as default | "relu", "silu"
 
 training:
   batch_size: 128
-  max_iters: 2 #10000
+  max_iters: 10000
   lr: 1.0e-5
   warmup_iters: 5000
   weight_decay: 0.0
-  eval_interval: 1 #0
-  eval_iters: 1 #0
+  eval_interval: 1
+  eval_iters: 1
   patience: 10000
   fixed_lr: false        
-  smoothness: true                          # False as default
-  R: 0.5                                    # regularization weight | to tune
-  regression_mode: "time_full"              # "time_last" as default | "time_full", "one_step"
+  smoothness: true                                  # False as default
+  R: 0.5                                            # regularization weight | to tune
+  regression_mode: "time_full"                      # "time_last" as default | "time_full", "one_step"
 
 compute:
   threads: 16
@@ -52,18 +52,24 @@ compute:
 
 logging:
   checkpoint_stem: "test"
-  init_from: "scratch"                      # scratch | resume | pretrained
-  model_dir: "out"                          # not really needed if you use run-specific dirs
+  init_from: "scratch"                              # scratch | resume | pretrained
+  model_dir: "out"                                  # not really needed if you use run-specific dirs
 
 sweep:
-  n_layer:    [4, 8]
-  n_head:     [2, 4, 8]                     # sottomultiple di embd
-  n_embd:     [16, 32]
-  lr:         [1.0e-4, 5.0e-5, 1.0e-5]
-  batch_size: [64, 128]
+  n_layer:              [4, 8]                      # already tried              
+  n_head:               [2, 4, 8]                   # already tried
+  n_embd:               [16, 32]                    # already tried
+  lr:                   [1.0e-4, 5.0e-5, 1.0e-5]    # already tried
+  batch_size:           [64, 128]                   # already tried
+  R:                    [0.1, 0.5, 1.0]
+  dropout:              [0.0, 0.1, 0.2]
+  patience:             [2000, 10000]
+  bias:                 [true, false]
+  regression_mode:      ["time_last", "time_full"]
+  activation_function:  ["gelu", "silu"]
 
 plot:
-  output_subdir: "plots"                    # relative to run dir / sweep dir
+  output_subdir: "plots"                            # relative to run dir / sweep dir
   show: false
   print: false
   logy: true
@@ -71,6 +77,6 @@ plot:
   dpi: 160
   export_csv: true
   fmt: "pdf"
-  min_T: 1000                               # 0 if you want to start from t=0
-  max_T: 501                                # None is you want to plot the entire lenght
+  min_T: 1000                                       # 0 if you want to start from t=0
+  max_T: 501                                        # None is you want to plot the entire lenght
 

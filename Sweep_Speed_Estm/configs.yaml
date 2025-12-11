@@ -17,6 +17,13 @@ data:
 
   folders:
     - "simulated/50_percent_low_speed"
+  train__folders: 
+    - "simulated/50_percent_low_speed"
+  val__folders: 
+    - "simulated/50_percent_low_speed"
+  test__folders: 
+    - "simulated/50_percent_low_speed"
+  
   train_ratio: 0.7
   val_ratio: 0.2
   test_ratio: 0.1

@@ -201,6 +201,175 @@ def build_losses_from_history(history: List[Dict[str, Any]]) -> Dict[str, np.nda
     return out
 
 
+def load_resources_csv(run_dir: Path, res_csv: str) -> pd.DataFrame | None:
+    """
+    Load resources.csv if present in run_dir.
+    Returns None if not found or unreadable.
+    """
+    path = run_dir / res_csv
+    if not path.exists():
+        return None
+    try:
+        df = pd.read_csv(path)
+    except Exception as e:
+        print(f"[warn] Failed to read {path}: {e}")
+        return None
+
+    # prefer hours if available
+    if "t_hours" not in df.columns and "t_seconds" in df.columns:
+        df["t_hours"] = df["t_seconds"] / 3600.0
+
+    return df
+
+
+def simulate_early_stopping(
+    val: np.ndarray,
+    patience: int,
+    tol_rel: float = 0.01,
+    eval_interval: int = 1,
+    min_epochs: int = 0,
+) -> Dict[str, Any]:
+    """
+    Improvement condition:
+        val[t] <= best_so_far * (1 + tol_rel)
+
+    Stops when:
+        epoch >= min_epochs and no_improve >= patience
+    """
+    n = len(val)
+    best = np.inf
+    best_epoch = -1
+    baseline_epoch = -1
+    no_improve = 0
+    stop_epoch = n - 1
+    stopped_due_to_patience = False
+
+    # patience "can" only start after we have a finite best
+    patience_active_from_epoch = -1
+
+    for epoch in range(n):
+        # mimic eval schedule
+        if (epoch % max(1, eval_interval)) != 0:
+            continue
+
+        v = float(val[epoch])
+        if not math.isfinite(v):
+            continue
+
+        if best_epoch < 0:
+            best = v
+            best_epoch = epoch
+            baseline_epoch = epoch
+            no_improve = 0
+            # earliest epoch where patience counting is meaningful:
+            patience_active_from_epoch = max(epoch + eval_interval, int(min_epochs))
+            continue
+
+        within = v <= best * (1.0 + tol_rel)
+        if within:
+            if v < best:
+                best = v
+                best_epoch = epoch
+            no_improve = 0
+        else:
+            no_improve += 1
+
+        if epoch >= int(min_epochs) and no_improve >= int(patience):
+            stop_epoch = epoch
+            stopped_due_to_patience = True
+            break
+
+    return {
+        "patience": int(patience),
+        "tol_rel": float(tol_rel),
+        "eval_interval": int(eval_interval),
+        "min_epochs": int(min_epochs),
+        "baseline_epoch": int(baseline_epoch),
+        "patience_active_from_epoch": int(patience_active_from_epoch),
+        "stop_epoch": int(stop_epoch),
+        "stopped_due_to_patience": bool(stopped_due_to_patience),
+        "best_epoch": int(best_epoch),
+        "best_val": float(best) if math.isfinite(best) else np.nan,
+    }
+
+
+def recommend_patience_from_val(
+    val: np.ndarray,
+    tol_rel: float = 0.01,
+    eval_interval: int = 1,
+    min_epochs: int = 0,
+    patience_grid: Tuple[int, ...] = (1, 2, 3, 5, 8, 10, 15, 20, 30, 50),
+    # selection rule:
+    max_degrade_rel: float = 0.002,   # allow up to +0.2% worse best_val than full run
+) -> Dict[str, Any]:
+    """
+    Choose the smallest patience that:
+      - stops earliest
+      - but does NOT worsen best_val by more than max_degrade_rel relative to best over full run.
+
+    Returns:
+      {
+        "recommended_patience": ...,
+        "table": pd.DataFrame([...])
+      }
+    """
+    # full run baseline (patience huge)
+    full_best = float(np.nanmin(val)) if np.any(np.isfinite(val)) else np.nan
+
+    rows = []
+    sims = []
+    for p in patience_grid:
+        sim = simulate_early_stopping(
+            val=val,
+            patience=p,
+            tol_rel=tol_rel,
+            eval_interval=eval_interval,
+            min_epochs=min_epochs,
+        )
+        sims.append(sim)
+
+        best_p = sim["best_val"]
+        # relative degrade vs global best (full run)
+        degrade_rel = np.nan
+        if np.isfinite(full_best) and full_best > 0 and np.isfinite(best_p):
+            degrade_rel = (best_p - full_best) / full_best
+
+        rows.append({
+            "patience": p,
+            "baseline_epoch": sim["baseline_epoch"],
+            "patience_active_from_epoch": sim["patience_active_from_epoch"],
+            "stop_epoch": sim["stop_epoch"],
+            "best_epoch": sim["best_epoch"],
+            "best_val": best_p,
+            "best_val_degrade_rel": degrade_rel,
+            "epochs_saved_vs_full": (len(val) - 1) - sim["stop_epoch"],
+        })
+
+    tab = pd.DataFrame(rows).sort_values(["stop_epoch", "patience"], ascending=[True, True])
+
+    # feasibility: not too much worse than full-run best
+    feasible = tab[
+        tab["best_val_degrade_rel"].isna() | (tab["best_val_degrade_rel"] <= max_degrade_rel)
+    ]
+
+    if len(feasible) == 0:
+        # if everything degrades too much, pick the least bad (smallest degrade, then earliest stop)
+        tab2 = tab.sort_values(["best_val_degrade_rel", "stop_epoch", "patience"], ascending=[True, True, True])
+        rec = int(tab2.iloc[0]["patience"])
+        patience_active_from_epoch = int(tab2.iloc[0]["patience_active_from_epoch"])
+    else:
+        # choose earliest stop among feasible (tie-break by smaller patience)
+        rec = int(feasible.iloc[0]["patience"])
+        patience_active_from_epoch = int(feasible.iloc[0]["patience_active_from_epoch"])
+
+    return {
+        "recommended_patience": rec,
+        "patience_active_from_epoch": patience_active_from_epoch,
+        "full_run_best_val": full_best,
+        "table": tab,
+    }
+
+
 # ---------------------------------------------------------------------
 # Plotting functions
 # ---------------------------------------------------------------------
@@ -214,6 +383,8 @@ def plot_losses(
     ma: int,
     dpi: int,
     fmt: str,
+    print_flag: bool,
+    cfg: Dict[str, Any],
     prefix: str = "",
 ) -> Tuple[Path, Path]:
     outdir.mkdir(parents=True, exist_ok=True)
@@ -265,6 +436,32 @@ def plot_losses(
     fig2.tight_layout()
     f2 = outdir / f"{prefix}_loss_boxplots.{fmt}"
     fig2.savefig(f2, dpi=dpi, format=fmt)
+
+
+    # ---- Suggest patience based on val trajectory ----
+    val_arr = np.asarray(data["val"], dtype=float)
+    eval_interval = int(cfg.get("training", {}).get("eval_interval", 1))
+    tol_rel = float(cfg.get("training", {}).get("early_stop_tol_rel", 0.01))  # add to yaml if you want
+    min_epochs = int(cfg.get("training", {}).get("min_epochs", 0))
+
+    rec = recommend_patience_from_val(
+        val=val_arr,
+        tol_rel=tol_rel,
+        eval_interval=eval_interval,
+        min_epochs=min_epochs,
+        patience_grid=(20, 30, 50, 100, 150, 300, 500, 750, 1000, 1200, 2000, 5000),
+        max_degrade_rel=0.002,
+    )
+
+    if print_flag:
+        print("\n[patience-suggest]")
+        print(f"  tol_rel={tol_rel}  eval_interval={eval_interval}  min_epochs={min_epochs}")
+        print(f"  full-run best val: {rec['full_run_best_val']:.6g}")
+        print(f"  recommended patience: {rec['recommended_patience']}")
+        print(f"  (patience_active_from_epoch epoch: {rec['patience_active_from_epoch']})")
+        # optional: dump table
+        # print(rec["table"].to_string(index=False))
+
 
     if show:
         plt.show()
@@ -474,6 +671,101 @@ def maybe_plot_optional_curves(
     return f
 
 
+def plot_resource_timeseries(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    outdir: Path,
+    ylabel: str,
+    title: str,
+    fname: str,
+    dpi: int,
+    fmt: str,
+):
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    if x_col not in df.columns or y_col not in df.columns:
+        return None
+
+    x = df[x_col].to_numpy()
+    y = df[y_col].to_numpy()
+
+    if np.all(~np.isfinite(y)):
+        return None
+
+    fig = plt.figure(figsize=(7, 4))
+    ax = fig.add_subplot(111)
+    ax.plot(x, y, linewidth=1.2)
+    ax.set_xlabel("Time (hours)")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+
+    path = outdir / f"{fname}.{fmt}"
+    fig.savefig(path, dpi=dpi, format=fmt)
+    plt.close(fig)
+    return path
+
+
+def plot_resources_over_time(
+    df: pd.DataFrame,
+    outdir: Path,
+    dpi: int,
+    fmt: str,
+    prefix: str = "",
+) -> List[Path]:
+    """
+    Plot key CPU / RAM / GPU metrics vs time.
+    Returns list of saved plot paths.
+    """
+    saved: List[Path] = []
+    x = "t_hours"
+
+    specs = [
+        # ---- GPU ----
+        ("gpu_util_percent", "GPU Utilization (%)", "GPU Utilization", "gpu_util"),
+        ("gpu_mem_used_mb", "GPU Memory Used (MB)", "GPU Memory Usage", "gpu_mem_used"),
+        ("gpu_mem_used_percent", "GPU Memory Used (%)", "GPU Memory %", "gpu_mem_pct"),
+        ("gpu_temp_c", "GPU Temperature (°C)", "GPU Temperature", "gpu_temp"),
+        ("gpu_power_w", "GPU Power (W)", "GPU Power Usage", "gpu_power"),
+        ("gpu_sm_clock_mhz", "GPU SM Clock (MHz)", "GPU SM Clock", "gpu_sm_clock"),
+        ("gpu_mem_clock_mhz", "GPU Memory Clock (MHz)", "GPU Memory Clock", "gpu_mem_clock"),
+
+        # ---- CPU / process ----
+        ("cpu_percent", "CPU Utilization (%)", "System CPU Utilization", "cpu_util"),
+        ("proc_cpu_percent", "Process CPU (%)", "Process CPU Utilization", "proc_cpu"),
+        ("proc_threads", "Threads", "Process Threads", "proc_threads"),
+
+        # ---- RAM ----
+        ("ram_percent", "RAM Utilization (%)", "System RAM Usage", "ram_pct"),
+        ("proc_rss_mb", "Process RSS (MB)", "Process Memory RSS", "proc_rss"),
+
+        # ---- IO ----
+        ("disk_read_bytes", "Disk Read (bytes)", "Disk Read", "disk_read"),
+        ("disk_write_bytes", "Disk Write (bytes)", "Disk Write", "disk_write"),
+        ("net_recv_bytes", "Network RX (bytes)", "Network Receive", "net_rx"),
+        ("net_sent_bytes", "Network TX (bytes)", "Network Transmit", "net_tx"),
+    ]
+
+    for col, ylabel, title, stem in specs:
+        p = plot_resource_timeseries(
+            df=df,
+            x_col=x,
+            y_col=col,
+            outdir=outdir,
+            ylabel=ylabel,
+            title=title,
+            fname=f"{prefix}_resource_{stem}",
+            dpi=dpi,
+            fmt=fmt,
+        )
+        if p is not None:
+            saved.append(p)
+
+    return saved
+
+
 # ---------------------------------------------------------------------
 # Modular entry point: can be called from training or CLI
 # ---------------------------------------------------------------------
@@ -490,6 +782,7 @@ def run_training_plots(
     device_type: str = None,
     label: str | None = None,
     show: bool | None = None,
+    prnt: bool = True,
 ):
     """
     Main plotting entry point.
@@ -542,12 +835,8 @@ def run_training_plots(
     outdir = outdir / "train"
 
     # show override
-    if show is None:
-        show_flag = bool(plot_cfg.get("show", False))
-        print_flag = bool(plot_cfg.get("print", False))
-    else:
-        show_flag = bool(show)
-        print_flag = show_flag
+    show_flag = bool(plot_cfg.get("show", False)) if show is None else bool(show)
+    print_flag = bool(plot_cfg.get("print", False)) if prnt is None else bool(prnt)
 
     # Load losses
     if history is not None:
@@ -582,6 +871,8 @@ def run_training_plots(
         dpi=dpi,
         fmt=fmt,
         prefix=prefix,
+        print_flag=print_flag,
+        cfg=cfg,
     )
     if print_flag: print(f"[OK] Saved figures:\n  - {f1}\n  - {f2}")
 
@@ -666,6 +957,26 @@ def run_training_plots(
     minutes, seconds = divmod(rem, 60)
 
 
+    # -------------------------------------------------
+    # Resource usage plots (CPU / RAM / GPU)
+    # -------------------------------------------------
+    res_csv = cfg.get("experiment", {}).get("resources", "resources.csv")
+    df_res = load_resources_csv(run_dir, res_csv)
+    if df_res is not None:
+        res_outdir = outdir / "resources"
+        res_plots = plot_resources_over_time(
+            df=df_res,
+            outdir=res_outdir,
+            dpi=dpi,
+            fmt=fmt,
+            prefix=prefix,
+        )
+        if print_flag and res_plots:
+            print("[OK] Saved resource plots:")
+            for p in res_plots:
+                print(f"  - {p}")
+
+
     run_name = cfg["experiment"]["name"]
     print(f"\n\n"
           f"Run: {run_name}\n"
@@ -701,6 +1012,11 @@ def main():
         action="store_true",
         help="Show plots interactively instead of just saving them.",
     )
+    parser.add_argument(
+        "--print",
+        action="store_true",
+        help="Print debug information.",
+    )
 
     args = parser.parse_args()
     run_dir = Path(args.dir).expanduser().resolve()
@@ -717,6 +1033,7 @@ def main():
         train_time=None,
         label=None,
         show=args.show,
+        prnt=args.print,
     )
 
 

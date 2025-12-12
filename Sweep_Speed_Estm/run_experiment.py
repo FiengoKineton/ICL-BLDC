@@ -12,7 +12,7 @@ from engine import train, validate
 from engine_utils import build_device, build_model, configure_optimizer, warmup_cosine_lr
 from plot_testing import run_testing
 from plot_training import run_training_plots
-
+from resource_monitor import ResourceMonitor
 
 
 def run_single_experiment(
@@ -107,6 +107,14 @@ def run_single_experiment(
     best_epoch = -1
     patience = cfg_training["patience"]
     no_improve = 0
+
+    # -------- resource monitor (CPU/RAM/GPU/etc) --------
+    mon = ResourceMonitor(
+        sample_interval_s=5.0,                 # change as you like
+        device_index=0,                        # GPU index
+        enabled=True,                          # can be cfg-driven
+    )
+    mon.start()
     start_time = time.time()
 
     eval_interval = cfg_training.get("eval_interval", 1)
@@ -189,6 +197,12 @@ def run_single_experiment(
     # Save history as CSV
     df_hist = pd.DataFrame(history)
     df_hist.to_csv(run_dir / "history.csv", index=False)
+
+    # Stop monitor + save CSV
+    df_res = mon.stop()
+    res_csv = cfg.get("experiment", {}).get("resources", "resources.csv")
+    df_res.to_csv(run_dir / res_csv, index=False)
+
 
     # Save the config actually used for this run
     import yaml

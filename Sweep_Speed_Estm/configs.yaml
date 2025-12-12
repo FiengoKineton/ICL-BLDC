@@ -6,6 +6,7 @@ experiment:
   output_root: "runs"                               # out directory for single run
   output_sweep: "sweeps"
   seed: 42
+  resources: "resources.csv"
 
 data:
   project_root_marker: "Sweep_Speed_Estm"           # used to split cwd
@@ -31,7 +32,7 @@ data:
 
 model:
   n_layer: 8
-  n_head: 4                                         # 4 as default | sottomultiple di embd
+  n_head: 8                                         # 4 as default | sottomultiple di embd
   n_embd: 32                                        # 16 as default
   dropout: 0.0
   bias: false
@@ -45,7 +46,7 @@ training:
   weight_decay: 0.0
   eval_interval: 1
   eval_iters: 1
-  patience: 10000
+  patience: 1000
   fixed_lr: false        
   smoothness: true                                  # False as default
   R: 0.5                                            # regularization weight | to tune
@@ -68,7 +69,7 @@ sweep:
   n_embd:               [16, 32]                    # already tried
   lr:                   [1.0e-4, 5.0e-5, 1.0e-5]    # already tried
   batch_size:           [64, 128]                   # already tried
-  # n_layer8_n_head4_n_embd32_batch_size64,8,4,32,64,0.0006311004399321973,1d  8h  6m 37s,115597
+  # n_layer8_n_head8_n_embd32_batch_size64,8,8,32,64,0.0006299590750131756,0d 10h 32m 31s,37951
   R:                    [0.1, 0.5, 1.0]
   dropout:              [0.0, 0.1, 0.2]
   patience:             [2000, 10000]
@@ -79,7 +80,7 @@ sweep:
 plot:
   output_subdir: "plots"                            # relative to run dir / sweep dir
   show: false
-  print: false
+  print: true
   logy: true
   ma: 1
   dpi: 160

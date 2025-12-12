@@ -44,7 +44,7 @@ def run_sweep(cfg: Dict[str, Any]):
 
     train_ds, val_ds, test_ds = load_datasets(base_cfg["data"])
 
-    root = Path(base_cfg["experiment"]["output_sweep"])
+    root = Path(base_cfg["experiment"]["output_root"]) / base_cfg["experiment"]["output_sweep"]
     root.mkdir(parents=True, exist_ok=True)
 
     results_rows = []

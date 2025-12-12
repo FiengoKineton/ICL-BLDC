@@ -24,6 +24,75 @@ _TIME_RE = re.compile(
 )
 
 
+def scatter3d_inputs_with_output_colorbar(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    z_col: str,
+    c_col: str,
+    outdir: str | Path,
+    filename: Optional[str] = None,
+    title: Optional[str] = None,
+    dpi: int = 200,
+    elev: float = 20,
+    azim: float = -60,
+    s: float = 35,
+) -> Path:
+    """
+    3D scatter: (x_col, y_col, z_col) as coordinates, colored by c_col.
+    Saves figure to outdir and returns the saved path.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    cols = [x_col, y_col, z_col, c_col]
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns for 3D scatter: {missing}. Available: {list(df.columns)}")
+
+    # Coerce to numeric and drop NaNs/infs
+    work = df.copy()
+    for c in cols:
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=cols)
+
+    if len(work) < 3:
+        raise ValueError(f"Not enough valid rows for 3D scatter after cleaning: {len(work)}")
+
+    x = work[x_col].to_numpy()
+    y = work[y_col].to_numpy()
+    z = work[z_col].to_numpy()
+    c = work[c_col].to_numpy()
+
+    fig = plt.figure(figsize=(7.5, 6))
+    ax = fig.add_subplot(111, projection="3d")
+
+    sc = ax.scatter(x, y, z, c=c, s=s)
+
+    ax.set_xlabel(x_col)
+    ax.set_ylabel(y_col)
+    ax.set_zlabel(z_col)
+
+    if title is None:
+        title = f"3D scatter: ({x_col}, {y_col}, {z_col}) colored by {c_col}"
+    ax.set_title(title)
+
+    ax.view_init(elev=elev, azim=azim)
+
+    cbar = fig.colorbar(sc, ax=ax, pad=0.08, shrink=0.8)
+    cbar.set_label(c_col)
+
+    fig.tight_layout()
+
+    if filename is None:
+        filename = f"scatter3d_{x_col}_{y_col}_{z_col}_color_{c_col}.pdf"
+
+    outpath = outdir / filename
+    fig.savefig(outpath, dpi=dpi)
+    plt.close(fig)
+    return outpath
+
+
 def one_param_change_effects(
     df: pd.DataFrame,
     outdir: str | Path,
@@ -342,6 +411,7 @@ class AnalysisResult:
 
 def analyze_runs_csv(
     csv_path: str | Path,
+    base: str | Path = "runs/sweeps",
     outdir: str | Path = "run_analysis_out",
     run_col: str = "run",
     val_loss_col: str = "best_val_loss",
@@ -364,9 +434,10 @@ def analyze_runs_csv(
     If your CSV has hyperparams as columns already, it will use them too.
     If not, it will try to infer n_layer/n_head/n_embd/batch_size from the run name.
     """
-    csv_path = Path(csv_path)
+    base = Path(base)  
+    csv_path = base / csv_path
     #outdir = csv_path / outdir
-    outdir = Path(outdir)
+    outdir = base / outdir
     outdir.mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(csv_path)
 
@@ -524,6 +595,35 @@ def analyze_runs_csv(
         )
 
 
+    # 3D scatter: pick any 3 inputs + 1 output to color
+    # Example: inputs = (n_layer, n_head, n_embd), output = best_val_loss
+    p3d = scatter3d_inputs_with_output_colorbar(
+        df=cleaned,
+        x_col="n_layer",
+        y_col="n_head",
+        z_col="n_embd",
+        c_col=val_loss_col,   # or "_time_hours" if you want time as the "output"
+        outdir=outdir,
+        filename="scatter3d_layers_heads_embd_color_loss.pdf",
+        title="Hyperparams (3D) colored by validation loss",
+    )
+    saved.append(p3d)
+
+    # Optional second one: color by training time
+    p3d_time = scatter3d_inputs_with_output_colorbar(
+        df=cleaned,
+        x_col="n_layer",
+        y_col="n_head",
+        z_col="n_embd",
+        c_col="_time_hours",
+        outdir=outdir,
+        filename="scatter3d_layers_heads_embd_color_time.pdf",
+        title="Hyperparams (3D) colored by training time [hours]",
+    )
+    saved.append(p3d_time)
+
+
+
     return AnalysisResult(
         best_run=best_run,
         best_val_loss=best_val_loss,
@@ -535,7 +635,7 @@ def analyze_runs_csv(
 
 
 """
-python run_analysis.py --csv runs/sweeps/<name_sweep>.csv
+python run_analysis.py --csv <name_sweep>.csv
 """
 
 if __name__ == "__main__":
@@ -543,6 +643,7 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", required=True, help="Path to runs CSV")
+    ap.add_argument("--base", default="runs/sweeps", help="Base directory for outputs")
     ap.add_argument("--outdir", default="sweep_analysis_out", help="Output directory for plots/tables")
     ap.add_argument("--run_col", default="run")
     ap.add_argument("--val_loss_col", default="best_val_loss")
@@ -553,6 +654,7 @@ if __name__ == "__main__":
     res = analyze_runs_csv(
         csv_path=args.csv,
         outdir=args.outdir,
+        base=args.base,
         run_col=args.run_col,
         val_loss_col=args.val_loss_col,
         time_col=args.time_col,

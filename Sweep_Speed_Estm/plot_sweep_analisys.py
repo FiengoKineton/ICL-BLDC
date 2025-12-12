@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
-import re
+import re, itertools
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -22,6 +22,123 @@ _TIME_RE = re.compile(
     r"(?:(\d+)\s*s)?\s*$",
     re.IGNORECASE
 )
+
+
+def one_param_change_effects(
+    df: pd.DataFrame,
+    outdir: str | Path,
+    hyperparams=("n_layer", "n_head", "n_embd", "batch_size"),
+    loss_col="best_val_loss",
+    time_col_seconds="train_time_seconds",
+) -> dict[str, pd.DataFrame]:
+    """
+    For each hyperparameter p in hyperparams:
+      - hold the others fixed
+      - compare all runs that share the fixed tuple
+      - keep only comparisons where ONLY p differs
+      - report delta loss/time for each pair
+
+    Returns dict: {param_name -> result_df}
+    Also writes CSVs into outdir.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # Ensure numeric
+    work = df.copy()
+    for c in list(hyperparams) + [loss_col, time_col_seconds]:
+        if c in work.columns:
+            work[c] = pd.to_numeric(work[c], errors="coerce")
+
+    # Drop rows missing essentials
+    work = work.dropna(subset=[loss_col, time_col_seconds, *hyperparams]).copy()
+
+    results: dict[str, pd.DataFrame] = {}
+
+    for p in hyperparams:
+        fixed = [q for q in hyperparams if q != p]
+
+        rows = []
+        # group by fixed params
+        for fixed_vals, g in work.groupby(fixed, dropna=False):
+            g = g.sort_values(p)
+            if len(g) < 2:
+                continue
+
+            # Compare all pairs within the group (only p can differ because group fixed others)
+            idxs = list(g.index)
+            for i, j in itertools.combinations(idxs, 2):
+                r1 = g.loc[i]
+                r2 = g.loc[j]
+
+                # sanity: check only p differs (should be true by construction, but keep it strict)
+                if any(r1[q] != r2[q] for q in fixed):
+                    continue
+                if r1[p] == r2[p]:
+                    continue
+
+                delta_p = float(r2[p] - r1[p])
+                delta_loss = float(r2[loss_col] - r1[loss_col])
+                delta_time_s = float(r2[time_col_seconds] - r1[time_col_seconds])
+
+                rows.append({
+                    **{q: r1[q] for q in fixed},  # fixed context
+                    f"{p}_from": float(r1[p]),
+                    f"{p}_to": float(r2[p]),
+                    f"delta_{p}": delta_p,
+                    "loss_from": float(r1[loss_col]),
+                    "loss_to": float(r2[loss_col]),
+                    "delta_loss": delta_loss,
+                    "time_s_from": float(r1[time_col_seconds]),
+                    "time_s_to": float(r2[time_col_seconds]),
+                    "delta_time_seconds": delta_time_s,
+                    "delta_time_hours": delta_time_s / 3600.0,
+                    "run_from": r1.get("run", ""),
+                    "run_to": r2.get("run", ""),
+                })
+
+        res = pd.DataFrame(rows)
+        if not res.empty:
+            # Add a few convenience summaries
+            res["loss_improved"] = res["delta_loss"] < 0
+            res["time_increased"] = res["delta_time_seconds"] > 0
+
+            # Sort: biggest loss improvements first (most negative delta_loss)
+            res = res.sort_values(["delta_loss", "delta_time_seconds"], ascending=[True, True])
+
+        results[p] = res
+        res.to_csv(outdir / f"one_param_effect_{p}.csv", index=False)
+
+    return results
+
+
+def summarize_one_param_effects(results: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """
+    Condenses each one-param analysis into a small summary table:
+      - number of valid comparisons
+      - mean delta loss / time
+      - fraction where loss improved
+    """
+    rows = []
+    for p, dfp in results.items():
+        if dfp is None or dfp.empty:
+            rows.append({
+                "param": p,
+                "n_comparisons": 0,
+                "mean_delta_loss": np.nan,
+                "mean_delta_time_hours": np.nan,
+                "frac_loss_improved": np.nan,
+            })
+            continue
+        rows.append({
+            "param": p,
+            "n_comparisons": int(len(dfp)),
+            "mean_delta_loss": float(dfp["delta_loss"].mean()),
+            "mean_delta_time_hours": float(dfp["delta_time_hours"].mean()),
+            "frac_loss_improved": float((dfp["delta_loss"] < 0).mean()),
+        })
+    return pd.DataFrame(rows).sort_values("n_comparisons", ascending=False)
+
 
 def parse_training_time_to_seconds(x: Any) -> float:
     """
@@ -87,6 +204,126 @@ def seconds_to_hms(seconds: float) -> str:
     h, rem = divmod(rem, 3600)
     m, s = divmod(rem, 60)
     return f"{d}d {h:02d}h {m:02d}m {s:02d}s"
+
+
+def plot_one_param_slices(
+    df: pd.DataFrame,
+    param: str,
+    loss_col: str = "best_val_loss",
+    time_col_s: str = "train_time_seconds",
+    hyperparams: Tuple[str, ...] = ("n_layer", "n_head", "n_embd", "batch_size"),
+    outdir: str | Path = "run_analysis_out",
+    min_points_per_slice: int = 2,
+    # Legend controls
+    show_legend: bool = True,
+    legend_max_entries: int = 12,         # limit clutter; set None to show all
+    legend_outside: bool = True,          # place legend outside plot
+) -> Tuple[Path, Path]:
+    """
+    For a chosen `param`, plot:
+      1) loss vs param
+      2) time vs param (hours)
+    for each "slice" where all other hyperparams are fixed.
+
+    Legend now works for any param because we don't auto-disable it when slices > 10.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    if param not in hyperparams:
+        raise ValueError(f"param must be in {hyperparams}, got {param}")
+
+    fixed = [p for p in hyperparams if p != param]
+
+    work = df.copy()
+    # numeric coercion
+    for c in [*hyperparams, loss_col, time_col_s]:
+        if c in work.columns:
+            work[c] = pd.to_numeric(work[c], errors="coerce")
+
+    work = work.dropna(subset=[param, *fixed, loss_col, time_col_s]).copy()
+    if work.empty:
+        raise ValueError("No valid rows after dropping NaNs for the requested plot.")
+
+    def _as_tuple(x):
+        return x if isinstance(x, tuple) else (x,)
+
+    def _label_from_fixed(fixed_vals):
+        fixed_vals = _as_tuple(fixed_vals)
+        parts = []
+        for k, v in zip(fixed, fixed_vals):
+            # pretty int formatting
+            if isinstance(v, (int, np.integer)) or (isinstance(v, float) and float(v).is_integer()):
+                parts.append(f"{k}={int(v)}")
+            else:
+                parts.append(f"{k}={v}")
+        return ", ".join(parts)
+
+    def _apply_legend(fig, ax):
+        if not show_legend:
+            return
+        handles, labels = ax.get_legend_handles_labels()
+        if not handles:
+            return
+
+        if legend_max_entries is not None and len(handles) > legend_max_entries:
+            handles = handles[:legend_max_entries]
+            labels = labels[:legend_max_entries]
+            labels[-1] = labels[-1] + "  (…more)"
+
+        if legend_outside:
+            ax.legend(handles, labels, fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5))
+            fig.tight_layout(rect=[0, 0, 0.78, 1])  # leave room for legend
+        else:
+            ax.legend(handles, labels, fontsize=8, loc="best")
+            fig.tight_layout()
+
+    # ---------- Plot 1: Loss vs param ----------
+    fig1 = plt.figure(figsize=(9, 5))
+    ax1 = plt.gca()
+
+    # group by fixed params
+    for fixed_vals, g in work.groupby(fixed, dropna=False):
+        g = g.sort_values(param)
+        if len(g) < min_points_per_slice:
+            continue
+        x = g[param].values
+        y = g[loss_col].values
+        ax1.plot(x, y, marker="o", linewidth=1.2, label=_label_from_fixed(fixed_vals))
+
+    ax1.set_xlabel(param)
+    ax1.set_ylabel("Best validation loss")
+    ax1.set_title(f"Effect of {param} on validation loss (others fixed)")
+    ax1.grid(True)
+    _apply_legend(fig1, ax1)
+
+    p1 = outdir / f"slices_{param}_vs_loss.pdf"
+    fig1.savefig(p1, dpi=200)
+    plt.close(fig1)
+
+    # ---------- Plot 2: Time vs param ----------
+    fig2 = plt.figure(figsize=(9, 5))
+    ax2 = plt.gca()
+
+    for fixed_vals, g in work.groupby(fixed, dropna=False):
+        g = g.sort_values(param)
+        if len(g) < min_points_per_slice:
+            continue
+        x = g[param].values
+        y = (g[time_col_s].values / 3600.0)
+        ax2.plot(x, y, marker="o", linewidth=1.2, label=_label_from_fixed(fixed_vals))
+
+    ax2.set_xlabel(param)
+    ax2.set_ylabel("Training time [hours]")
+    ax2.set_title(f"Effect of {param} on training time (others fixed)")
+    ax2.grid(True)
+    _apply_legend(fig2, ax2)
+
+    p2 = outdir / f"slices_{param}_vs_time.pdf"
+    fig2.savefig(p2, dpi=200)
+    plt.close(fig2)
+
+    return p1, p2
 
 
 # ----------------------------
@@ -254,6 +491,38 @@ def analyze_runs_csv(
     cleaned_path = outdir / "cleaned_runs_table.csv"
     cleaned.to_csv(cleaned_path, index=False)
     saved.append(cleaned_path)
+
+    # Example integration inside analyze_runs_csv(...) after 'cleaned' is built:
+    effects = one_param_change_effects(
+        df=cleaned.rename(columns={
+            "_time_seconds": "train_time_seconds",
+            # ensure your loss column name matches below
+        }),
+        outdir=outdir,
+        hyperparams=("n_layer", "n_head", "n_embd", "batch_size"),
+        loss_col=val_loss_col,
+        time_col_seconds="train_time_seconds",
+    )
+
+    summary = summarize_one_param_effects(effects)
+    summary.to_csv(Path(outdir) / "one_param_effects_summary.csv", index=False)
+    print("\n=== One-param change summary ===")
+    print(summary)
+
+    # Example: layers effect with heads/embd/batch fixed
+    for p in ["n_layer", "n_head", "n_embd", "batch_size"]:
+        plot_one_param_slices(
+            df=cleaned.rename(columns={
+                "_time_seconds": "train_time_seconds",
+                # ensure your loss column name matches below
+            }),
+            param=p,
+            loss_col="best_val_loss",
+            time_col_s="train_time_seconds",
+            outdir=outdir,
+            min_points_per_slice=2,  # set to 3 if you literally want “only the 3-point cases”
+        )
+
 
     return AnalysisResult(
         best_run=best_run,

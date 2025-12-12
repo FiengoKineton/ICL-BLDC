@@ -1,0 +1,301 @@
+# run_analysis.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Dict, Any, Tuple, List
+
+import re
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+# ----------------------------
+# Helpers
+# ----------------------------
+
+_TIME_RE = re.compile(
+    r"(?:(\d+)\s*d)?\s*"
+    r"(?:(\d+)\s*h)?\s*"
+    r"(?:(\d+)\s*m)?\s*"
+    r"(?:(\d+)\s*s)?\s*$",
+    re.IGNORECASE
+)
+
+def parse_training_time_to_seconds(x: Any) -> float:
+    """
+    Accepts:
+      - seconds as numeric
+      - strings like "0d 17h 13m 17s" (any subset)
+      - strings like "17h 13m 17s"
+    Returns seconds (float). NaN if not parseable.
+    """
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return np.nan
+    if isinstance(x, (int, float, np.integer, np.floating)):
+        return float(x)
+
+    s = str(x).strip()
+    if s.isdigit():
+        return float(s)
+
+    m = _TIME_RE.match(s)
+    if not m:
+        return np.nan
+
+    d = int(m.group(1)) if m.group(1) else 0
+    h = int(m.group(2)) if m.group(2) else 0
+    mm = int(m.group(3)) if m.group(3) else 0
+    sec = int(m.group(4)) if m.group(4) else 0
+    return float(d * 86400 + h * 3600 + mm * 60 + sec)
+
+
+def ensure_numeric(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+def infer_hparams_from_run_name(run: str) -> Dict[str, Optional[float]]:
+    """
+    Parses names like:
+      n_layer4_n_head4_n_embd16_batch_size64
+    Returns dict with numeric values when present.
+    """
+    if not isinstance(run, str):
+        return {"n_layer": None, "n_head": None, "n_embd": None, "batch_size": None}
+
+    def grab(key: str) -> Optional[float]:
+        m = re.search(rf"{key}(\d+)", run)
+        return float(m.group(1)) if m else None
+
+    return {
+        "n_layer": grab("n_layer"),
+        "n_head": grab("n_head"),
+        "n_embd": grab("n_embd"),
+        "batch_size": grab("batch_size"),
+    }
+
+
+def seconds_to_hms(seconds: float) -> str:
+    if seconds is None or np.isnan(seconds):
+        return "NaN"
+    seconds = int(round(seconds))
+    d, rem = divmod(seconds, 86400)
+    h, rem = divmod(rem, 3600)
+    m, s = divmod(rem, 60)
+    return f"{d}d {h:02d}h {m:02d}m {s:02d}s"
+
+
+# ----------------------------
+# Main analysis
+# ----------------------------
+
+@dataclass
+class AnalysisResult:
+    best_run: str
+    best_val_loss: float
+    best_time_seconds: float
+    correlations: pd.DataFrame
+    cleaned_table: pd.DataFrame
+    saved_plots: List[Path]
+
+
+def analyze_runs_csv(
+    csv_path: str | Path,
+    outdir: str | Path = "run_analysis_out",
+    run_col: str = "run",
+    val_loss_col: str = "best_val_loss",
+    time_col: str = "train_time",
+    time_is_seconds: bool = False,
+) -> AnalysisResult:
+    """
+    Reads a CSV of runs and produces:
+      - bar plot of best val loss per run
+      - bar plot of train time per run (hours)
+      - scatter plot: time vs loss
+      - scatter plots: each hyperparam vs loss/time
+      - correlation matrix among numeric hyperparams + loss + time
+
+    Required columns:
+      - run_col (default: 'run')
+      - val_loss_col (default: 'best_val_loss')
+      - time_col (default: 'train_time') : either seconds or strings like '0d 17h 13m 17s'
+
+    If your CSV has hyperparams as columns already, it will use them too.
+    If not, it will try to infer n_layer/n_head/n_embd/batch_size from the run name.
+    """
+    csv_path = Path(csv_path)
+    #outdir = csv_path / outdir
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(csv_path)
+
+    if run_col not in df.columns:
+        raise ValueError(f"Missing required column '{run_col}'. Columns: {list(df.columns)}")
+    if val_loss_col not in df.columns:
+        raise ValueError(f"Missing required column '{val_loss_col}'. Columns: {list(df.columns)}")
+    if time_col not in df.columns:
+        raise ValueError(f"Missing required column '{time_col}'. Columns: {list(df.columns)}")
+
+    # Normalize core columns
+    df = df.copy()
+    df[val_loss_col] = pd.to_numeric(df[val_loss_col], errors="coerce")
+
+    if time_is_seconds:
+        df["_time_seconds"] = pd.to_numeric(df[time_col], errors="coerce")
+    else:
+        df["_time_seconds"] = df[time_col].apply(parse_training_time_to_seconds)
+
+    # Add inferred hyperparams if missing
+    for hp in ["n_layer", "n_head", "n_embd", "batch_size"]:
+        if hp not in df.columns:
+            df[hp] = df[run_col].apply(lambda r: infer_hparams_from_run_name(str(r)).get(hp))
+
+    df = ensure_numeric(df, ["n_layer", "n_head", "n_embd", "batch_size", "_time_seconds", val_loss_col])
+
+    # Drop rows without essential metrics
+    core = df.dropna(subset=[val_loss_col, "_time_seconds"]).copy()
+    if core.empty:
+        raise ValueError("After parsing, no rows have both val loss and training time available.")
+
+    core["_time_hours"] = core["_time_seconds"] / 3600.0
+
+    # Best run by val loss
+    best_idx = core[val_loss_col].idxmin()
+    best_row = core.loc[best_idx]
+    best_run = str(best_row[run_col])
+    best_val_loss = float(best_row[val_loss_col])
+    best_time_seconds = float(best_row["_time_seconds"])
+
+    saved: List[Path] = []
+
+    # Sort for plotting
+    core_sorted_loss = core.sort_values(val_loss_col, ascending=True)
+    core_sorted_time = core.sort_values("_time_seconds", ascending=True)
+
+    # Plot 1: Best val loss per run (bar)
+    fig = plt.figure(figsize=(10, 4))
+    plt.bar(core_sorted_loss[run_col].astype(str), core_sorted_loss[val_loss_col].values)
+    plt.xticks(rotation=60, ha="right", fontsize=8)
+    plt.ylabel("Best validation loss")
+    plt.title("Best validation loss per run (lower is better)")
+    plt.tight_layout()
+    p = outdir / "bar_best_val_loss.pdf"
+    fig.savefig(p, dpi=200)
+    plt.close(fig)
+    saved.append(p)
+
+    # Plot 2: Training time per run (bar, hours)
+    fig = plt.figure(figsize=(10, 4))
+    plt.bar(core_sorted_time[run_col].astype(str), core_sorted_time["_time_hours"].values)
+    plt.xticks(rotation=60, ha="right", fontsize=8)
+    plt.ylabel("Training time [hours]")
+    plt.title("Training time per run")
+    plt.tight_layout()
+    p = outdir / "bar_training_time_hours.pdf"
+    fig.savefig(p, dpi=200)
+    plt.close(fig)
+    saved.append(p)
+
+    # Plot 3: Scatter time vs loss
+    fig = plt.figure(figsize=(6, 5))
+    plt.scatter(core["_time_hours"].values, core[val_loss_col].values)
+    plt.xlabel("Training time [hours]")
+    plt.ylabel("Best validation loss")
+    plt.title("Time vs validation loss")
+    plt.tight_layout()
+    p = outdir / "scatter_time_vs_loss.pdf"
+    fig.savefig(p, dpi=200)
+    plt.close(fig)
+    saved.append(p)
+
+    # Hyperparam vs loss/time scatters (only if enough non-NaN)
+    for hp in ["n_layer", "n_head", "n_embd", "batch_size"]:
+        if hp in core.columns and core[hp].notna().sum() >= 2:
+            # hp vs loss
+            fig = plt.figure(figsize=(6, 5))
+            plt.scatter(core[hp].values, core[val_loss_col].values)
+            plt.xlabel(hp)
+            plt.ylabel("Best validation loss")
+            plt.title(f"{hp} vs validation loss")
+            plt.tight_layout()
+            p = outdir / f"scatter_{hp}_vs_loss.pdf"
+            fig.savefig(p, dpi=200)
+            plt.close(fig)
+            saved.append(p)
+
+            # hp vs time
+            fig = plt.figure(figsize=(6, 5))
+            plt.scatter(core[hp].values, core["_time_hours"].values)
+            plt.xlabel(hp)
+            plt.ylabel("Training time [hours]")
+            plt.title(f"{hp} vs training time")
+            plt.tight_layout()
+            p = outdir / f"scatter_{hp}_vs_time.pdf"
+            fig.savefig(p, dpi=200)
+            plt.close(fig)
+            saved.append(p)
+
+    # Correlations (Pearson) on numeric columns
+    numeric_cols = [c for c in ["n_layer", "n_head", "n_embd", "batch_size"] if c in core.columns]
+    corr_df = core[numeric_cols + [val_loss_col, "_time_seconds"]].corr(numeric_only=True)
+
+    # Save correlations as CSV
+    corr_path = outdir / "correlations.csv"
+    corr_df.to_csv(corr_path)
+    saved.append(corr_path)
+
+    # Save cleaned table for inspection
+    cleaned = core[[run_col, val_loss_col, "_time_seconds", "_time_hours"] + numeric_cols].copy()
+    cleaned = cleaned.sort_values(val_loss_col, ascending=True)
+    cleaned_path = outdir / "cleaned_runs_table.csv"
+    cleaned.to_csv(cleaned_path, index=False)
+    saved.append(cleaned_path)
+
+    return AnalysisResult(
+        best_run=best_run,
+        best_val_loss=best_val_loss,
+        best_time_seconds=best_time_seconds,
+        correlations=corr_df,
+        cleaned_table=cleaned,
+        saved_plots=saved,
+    )
+
+
+"""
+python run_analysis.py --csv runs/sweeps/<name_sweep>.csv
+"""
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--csv", required=True, help="Path to runs CSV")
+    ap.add_argument("--outdir", default="sweep_analysis_out", help="Output directory for plots/tables")
+    ap.add_argument("--run_col", default="run")
+    ap.add_argument("--val_loss_col", default="best_val_loss")
+    ap.add_argument("--time_col", default="train_time")
+    ap.add_argument("--time_is_seconds", action="store_true", help="If set, time_col is already in seconds")
+    args = ap.parse_args()
+
+    res = analyze_runs_csv(
+        csv_path=args.csv,
+        outdir=args.outdir,
+        run_col=args.run_col,
+        val_loss_col=args.val_loss_col,
+        time_col=args.time_col,
+        time_is_seconds=args.time_is_seconds,
+    )
+
+    print("\n================= BEST RUN =================")
+    print(f"Run: {res.best_run}")
+    print(f"Best validation loss: {res.best_val_loss:.12g}")
+    print(f"Training time: {seconds_to_hms(res.best_time_seconds)}")
+    print("\n============= CORRELATIONS (Pearson) =============")
+    print(res.correlations.round(4))
+    print("\nSaved outputs:")
+    for p in res.saved_plots:
+        print(f" - {p}")

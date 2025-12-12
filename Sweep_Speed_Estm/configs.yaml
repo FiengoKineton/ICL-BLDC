@@ -31,14 +31,14 @@ data:
 
 model:
   n_layer: 8
-  n_head: 8                                         # 4 as default | sottomultiple di embd
+  n_head: 4                                         # 4 as default | sottomultiple di embd
   n_embd: 32                                        # 16 as default
   dropout: 0.0
   bias: false
   activation_function: "silu"                       # "gelu" as default | "relu", "silu"
 
 training:
-  batch_size: 128
+  batch_size: 64                                    # 128 as default 
   max_iters: 10000
   lr: 1.0e-5
   warmup_iters: 5000
@@ -68,6 +68,7 @@ sweep:
   n_embd:               [16, 32]                    # already tried
   lr:                   [1.0e-4, 5.0e-5, 1.0e-5]    # already tried
   batch_size:           [64, 128]                   # already tried
+  # n_layer8_n_head4_n_embd32_batch_size64,8,4,32,64,0.0006311004399321973,1d  8h  6m 37s,115597
   R:                    [0.1, 0.5, 1.0]
   dropout:              [0.0, 0.1, 0.2]
   patience:             [2000, 10000]

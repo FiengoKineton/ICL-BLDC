@@ -1,4 +1,4 @@
-# engine_utils.py
+# engine_utils.py       | SET (leave it as it is)
 
 import math, torch, torch.nn as nn
 from transformer_zerostep import GPTConfig, GPT
@@ -99,4 +99,12 @@ def warmup_cosine_lr(iter, lr, min_lr, warmup_iters, lr_decay_iters):
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
     return min_lr + coeff * (lr - min_lr)
+
+    # NOTE:
+    # A GPT-style Transformer is used here to model continuous-time signals by
+    # learning long-range temporal dependencies via attention, without imposing
+    # an explicit state-space or differential equation structure. This is useful
+    # for capturing nonlocal and multiscale temporal correlations in the data,
+    # but does not guarantee physical consistency or stability outside the
+    # observed time horizon.
 

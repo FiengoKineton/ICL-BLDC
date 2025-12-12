@@ -99,3 +99,4 @@ def warmup_cosine_lr(iter, lr, min_lr, warmup_iters, lr_decay_iters):
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
     return min_lr + coeff * (lr - min_lr)
+

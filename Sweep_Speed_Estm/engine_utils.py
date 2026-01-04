@@ -108,3 +108,45 @@ def warmup_cosine_lr(iter, lr, min_lr, warmup_iters, lr_decay_iters):
     # but does not guarantee physical consistency or stability outside the
     # observed time horizon.
 
+
+class TimeWeightedMSELoss(nn.Module):
+    """
+    Time-weighted MSE for sequences: y_pred, y_true in (B, T, D).
+    Weights increase with time so later steps matter more.
+    """
+    def __init__(self, mode: str = "linear", alpha: float = 2.0, eps: float = 1e-12):
+        super().__init__()
+        if mode not in ("linear", "exp"):
+            raise ValueError("mode must be 'linear' or 'exp'")
+        self.mode = mode
+        self.alpha = alpha
+        self.eps = eps
+
+    def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        if y_pred.shape != y_true.shape:
+            raise ValueError(f"Shape mismatch: {y_pred.shape=} vs {y_true.shape=}")
+        if y_pred.dim() != 3:
+            raise ValueError(f"Expected (B,T,D) tensors, got {y_pred.dim()} dims")
+
+        B, T, D = y_pred.shape
+
+        # per-time MSE: (B,T)
+        mse_t = ((y_pred - y_true) ** 2).mean(dim=-1)
+
+        # weights: (T,)
+        if self.mode == "linear":
+            w = torch.arange(1, T + 1, device=y_pred.device, dtype=y_pred.dtype) / T
+        else:  # "exp"
+            if T == 1:
+                return mse_t.mean()
+            t = torch.linspace(0, 1, T, device=y_pred.device, dtype=y_pred.dtype)
+            w = torch.exp(self.alpha * t)
+
+        # normalize weights to sum to 1 (stable across different T)
+        w = w / (w.sum() + self.eps)          # (T,)
+        w = w.view(1, T)                      # (1,T) broadcasts over batch
+
+        # weighted mean over time, then mean over batch
+        loss = (mse_t * w).sum(dim=1).mean()
+        return loss
+

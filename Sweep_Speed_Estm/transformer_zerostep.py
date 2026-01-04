@@ -1,4 +1,4 @@
-# model.py
+# model.py              | SET (leave it as it is)      
 
 """
 Implementation of the Transformer models for dynamical systems. Derived from Karpathy's nanoGPT

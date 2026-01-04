@@ -9,7 +9,7 @@ from typing import Dict, Any, List
 from torch.utils.data import DataLoader
 
 from engine import train, validate
-from engine_utils import build_device, build_model, configure_optimizer, warmup_cosine_lr
+from engine_utils import build_device, build_model, configure_optimizer, warmup_cosine_lr, TimeWeightedMSELoss
 from plot_testing import run_testing
 from plot_training import run_training_plots
 from resource_monitor import ResourceMonitor
@@ -80,7 +80,11 @@ def run_single_experiment(
     optimizer = configure_optimizer(model, cfg_training, device_type, print_flag)
 
     # Criterion
-    criterion = torch.nn.MSELoss()
+    loss = cfg_training.get("loss", "MSE")
+    if loss == "MSE":
+        criterion = torch.nn.MSELoss()
+    elif loss == "TimeWeightedMSE":
+        criterion = TimeWeightedMSELoss(mode=cfg_training["loss_mode"])
     num_params = model.get_num_params()
 
     # LR schedule

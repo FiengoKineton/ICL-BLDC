@@ -1,6 +1,6 @@
 # run_experiment.py     | SET (leave it as it is)
 
-import time, torch, torch.nn as nn, numpy as np, pandas as pd
+import os, time, torch, torch.nn as nn, numpy as np, pandas as pd
 
 from pathlib import Path
 from functools import partial
@@ -8,7 +8,7 @@ from copy import deepcopy
 from typing import Dict, Any, List
 from torch.utils.data import DataLoader
 
-from engine import train, validate
+from engine import train, validate, evaluate
 from engine_utils import build_device, build_model, configure_optimizer, warmup_cosine_lr, TimeWeightedMSELoss
 from plot_testing import run_testing
 from plot_training import run_training_plots
@@ -21,6 +21,7 @@ def run_single_experiment(
     val_ds,
     test_ds,
     run_dir: Path,
+    exp_name: str,
 ) -> float:
     """
     Core function: trains one model, saves checkpoints + history.
@@ -67,6 +68,12 @@ def run_single_experiment(
     val_dl = DataLoader(
         val_ds,
         batch_size=cfg_training["eval_batch_size"],
+        pin_memory=True,
+        shuffle=True,
+    )
+    test_dl = DataLoader(
+        test_ds,
+        batch_size=cfg_training["batch_size"],
         pin_memory=True,
         shuffle=True,
     )
@@ -122,6 +129,7 @@ def run_single_experiment(
     start_time = time.time()
 
     eval_interval = cfg_training.get("eval_interval", 1)
+    tex_filename = "run_ongoing.tex"
 
     for epoch in range(cfg_training["max_iters"]):
         # LR
@@ -134,17 +142,34 @@ def run_single_experiment(
 
         train_loss = train(model, train_dl, criterion, optimizer, device, R_smooth, regression_mode)
         val_loss = validate(model, val_dl, criterion, device, R_smooth, regression_mode) if (epoch % eval_interval) == 0 else np.nan
-
+        test_loss  = evaluate(model, test_dl, criterion, device, R_smooth, regression_mode)
 
         # Track
         row = {
             "epoch": epoch,
             "train_loss": float(train_loss),
             "val_loss": float(val_loss),
+            "test_loss": float(test_loss),
             "lr": float(lr_epoch),
             "best_val_loss_so_far": float(best_val_loss),
         }
         history.append(row)
+
+        if epoch % 100 == 0:
+                with open(tex_filename, "w") as f:
+                    f.write(r"\begin{tabular}{|l|l|}" + "\n")
+                    f.write(r"\hline" + "\n")
+                    f.write(r"\textbf{Metric} & \textbf{Value} \\\\" + "\n")
+                    f.write(f"Exp Name & {exp_name} \\\\ \n")
+                    f.write(f"Epoch & {epoch} \\\\ \n")
+                    f.write(f"Train Loss & {train_loss:.4e} \\\\ \n")
+                    f.write(f"Val Loss & {val_loss:.4e} \\\\ \n")
+                    f.write(f"Test Loss & {test_loss:.4e} \\\\ \n")
+                    f.write(f"Best Val Loss & {best_val_loss:.4e} \\\\ \n")
+                    f.write(f"Learning Rate & {lr_epoch:.3e} \\\\ \n")
+                    f.write(f"Patience Count & {no_improve}/{patience} \\\\ \n")
+                    f.write(r"\hline" + "\n")
+                    f.write(r"\end{tabular}")
 
         # Early stopping logic on actual val_loss
         if not np.isnan(val_loss):
@@ -173,7 +198,7 @@ def run_single_experiment(
         if (epoch % max(1, eval_interval)) == 0:
             if print_flag: print(
                 f"[epoch {epoch}] "
-                f"train={train_loss:.4e} val={val_loss:.4e} "
+                f"train={train_loss:.4e} val={val_loss:.4e} test={test_loss:.4e} "
                 f"best={best_val_loss:.4e} (epoch={best_epoch}) "
                 f"lr={lr_epoch:.3e} no_improve={no_improve}/{patience}"
             )
@@ -181,6 +206,9 @@ def run_single_experiment(
         if no_improve >= patience:
             if print_flag: print(f"[early-stop] epoch {epoch}, patience={patience}")
             break
+
+    if os.path.exists(tex_filename):
+        os.remove(tex_filename)
 
     # Final checkpoint (loss trajectory etc)
     train_time = time.time() - start_time
@@ -237,4 +265,4 @@ def run_single_experiment(
     )
 
     print(f"\n\n[run] Done. best_val_loss={best_val_loss:.4e} at epoch {best_epoch} (time: {train_time})")
-    return float(best_val_loss)
+    return float(best_val_loss), float(train_time)

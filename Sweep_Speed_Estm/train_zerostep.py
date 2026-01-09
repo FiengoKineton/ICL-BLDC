@@ -10,6 +10,7 @@ import pandas as pd
 
 from data_utils import load_datasets
 from run_experiment import run_single_experiment
+from plot_sweep_analisys import analyze_runs_csv
 
 
 def load_config(path: str) -> Dict[str, Any]:
@@ -26,8 +27,8 @@ def run_single(cfg: Dict[str, Any]):
     root = Path(cfg["experiment"]["output_root"])
     run_dir = root / exp_name
 
-    best = run_single_experiment(cfg, train_ds, val_ds, test_ds, run_dir)
-    print(f"[main] Single run finished, best_val_loss={best:.4e}\n")
+    best, train_time = run_single_experiment(cfg, train_ds, val_ds, test_ds, run_dir, exp_name)
+    print(f"[main] Single run finished, best_val_loss={best:.4e}, train_time={train_time:.2f}s\n")
 
 
 def run_sweep(cfg: Dict[str, Any]):
@@ -70,17 +71,31 @@ def run_sweep(cfg: Dict[str, Any]):
 
         run_dir = root / name
         print(f"[main] Running sweep combo {i}: {name}\n")
-        best_val_loss = run_single_experiment(cfg_run, train_ds, val_ds, test_ds, run_dir)
+        best_val_loss, train_time = run_single_experiment(cfg_run, train_ds, val_ds, test_ds, run_dir, name)
 
-        row = {"name": name, "best_val_loss": best_val_loss}
+        row = {"run": name, "best_val_loss": best_val_loss, "train_time_seconds": train_time}
         row.update(overrides)
         results_rows.append(row)
 
     if results_rows:
         df = pd.DataFrame(results_rows)
-        out_csv = root / "sweep_results.csv"
+        sweep_pth = "sweep_results.csv"
+        out_csv = root / sweep_pth
         df.to_csv(out_csv, index=False)
         print(f"[main] Saved sweep summary to {out_csv}")
+
+        try:
+            analyze_runs_csv(
+                    csv_path=sweep_pth,
+                    outdir="sweep_analysis_out",
+                    base=root,
+                    run_col="run",
+                    val_loss_col="best_val_loss",
+                    time_col="train_time_seconds",
+                    time_is_seconds=True,
+                )
+        except Exception as e:
+            print(f"[main] Warning: failed to analyze sweep results: {e}")
     else:
         print("[main] No sweep runs executed.")
 

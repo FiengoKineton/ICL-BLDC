@@ -96,6 +96,9 @@ class MLP(nn.Module):
             self.sigma = nn.ReLU()
         elif config.activation_function == "silu":
             self.sigma = nn.SiLU()
+        # SinLU?
+        elif config.activation_function == "tanh":
+            self.sigma = nn.Tanh()
         else:
             raise ValueError(f"Unsupported activation function: {config.activation_function}")
 

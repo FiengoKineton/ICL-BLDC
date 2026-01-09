@@ -1,0 +1,5 @@
+run,best_val_loss,train_time,smoothness,regression_mode,activation_function
+smoothnessFalse_regression_modetime_full_activation_functionsilu,0.0006893143290653825,0d 10h 39m  0s,False,time_full,silu
+smoothnessFalse_regression_modetime_full_activation_functiongelu,0.0006478430659626611,0d 10h 36m 55s,False,time_full,gelu
+smoothnessFalse_regression_modetime_last_activation_functionsilu,0.0006750887259840965,0d 10h 40m 39s,False,time_last,silu
+smoothnessFalse_regression_modetime_last_activation_functiongelu,0.0007031705245026387,0d 10h 43m 38s,False,time_last,gelu

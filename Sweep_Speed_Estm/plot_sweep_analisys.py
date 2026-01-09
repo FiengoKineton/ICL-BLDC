@@ -416,6 +416,7 @@ def analyze_runs_csv(
     run_col: str = "run",
     val_loss_col: str = "best_val_loss",
     time_col: str = "train_time",
+    time_sec_col: str = "train_time_seconds",
     time_is_seconds: bool = False,
 ) -> AnalysisResult:
     """
@@ -458,11 +459,12 @@ def analyze_runs_csv(
         df["_time_seconds"] = df[time_col].apply(parse_training_time_to_seconds)
 
     # Add inferred hyperparams if missing
-    for hp in ["n_layer", "n_head", "n_embd", "batch_size"]:
+    """for hp in ["n_layer", "n_head", "n_embd", "batch_size", 
+               "smoothness", "regression_mode", "activation_function", ]:
         if hp not in df.columns:
-            df[hp] = df[run_col].apply(lambda r: infer_hparams_from_run_name(str(r)).get(hp))
+            df[hp] = df[run_col].apply(lambda r: infer_hparams_from_run_name(str(r)).get(hp))"""
 
-    df = ensure_numeric(df, ["n_layer", "n_head", "n_embd", "batch_size", "_time_seconds", val_loss_col])
+    df = ensure_numeric(df, ["_time_seconds", val_loss_col])    #"n_layer", "n_head", "n_embd", "batch_size", 
 
     # Drop rows without essential metrics
     core = df.dropna(subset=[val_loss_col, "_time_seconds"]).copy()
@@ -642,7 +644,7 @@ if __name__ == "__main__":
     import argparse
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", required=True, help="Path to runs CSV")
+    ap.add_argument("--csv", default="sweep_results.csv", help="Path to runs CSV")
     ap.add_argument("--base", default="runs/sweeps", help="Base directory for outputs")
     ap.add_argument("--outdir", default="sweep_analysis_out", help="Output directory for plots/tables")
     ap.add_argument("--run_col", default="run")

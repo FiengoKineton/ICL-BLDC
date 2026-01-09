@@ -23,7 +23,7 @@ data:
   val__folders: 
     - "simulated/50_percent_low_speed"
   test__folders: 
-    - "simulated/50_percent_low_speed"
+    - "true/CL_experiments_double_sensor/inertia07_ki-0.0061-kp-11.8427"
   
   train_ratio: 0.7
   val_ratio: 0.2
@@ -53,6 +53,11 @@ training:
   regression_mode: "time_full"                      # "time_last" as default | "time_full", "one_step"
   loss: "TimeWeightedMSE"                           # "MSE" as default | "TimeWeightedMSE"
   loss_mode: "exp"                                  # for TimeWeightedMSE | "linear", "exp"
+
+simulations:
+  dt: 0.01                                          # time step of the data
+  fs: 100                                           # sampling frequency of the data
+  downsample_factor: 10                             # downsample factor for speed estimation
 
 compute:
   threads: 16

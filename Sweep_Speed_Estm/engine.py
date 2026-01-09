@@ -5,7 +5,10 @@ from typing import Optional
 from dataset import reverse_normalization
 
 
-def regression(batch_u, model, device, regression_mode: str = "time_last"):
+def regression(
+        batch_u, model, device, 
+        regression_mode: str = "time_last"
+        ):
     # Create a copy of batch_u to work with, and set the velocity column (index 4) to zero
     batch_u_copy = batch_u.clone()
     batch_u_copy[:,:,4] = 0 
@@ -48,9 +51,41 @@ def regression(batch_u, model, device, regression_mode: str = "time_last"):
     
     return batch_y_pred
 
+def smooth_dynamics_loss(
+    y_true: torch.Tensor,
+    y_pred: torch.Tensor,
+    R_smooth: float,
+    thresh: float = 0.01,
+    ):
+    """
+    Computes the dynamics-matching regularization term.
+
+    Args:
+        y_true: (B, H, 1)
+        y_pred: (B, H, 1)
+        R_smooth: regularization weight (scalar)
+        thresh: threshold for weighting the derivative penalty
+
+    Returns:
+        scalar tensor (already scaled by R_smooth^2)
+    """
+    if R_smooth is None or R_smooth == 0.0:
+        return 0.0
+
+    dy_true = y_true.diff(dim=1)      # (B, H-1, 1)
+    dy_pred = y_pred.diff(dim=1)      # (B, H-1, 1)
+
+    mag = dy_true.abs()
+    w_dyn = (mag / thresh).clamp(0.0, 1.0)
+
+    target_dy = w_dyn * dy_true #+ (1.0 - w_dyn) * 0.0
+    loss_dyn = ((dy_pred - target_dy) ** 2).mean()
+
+    return (R_smooth ** 2) * loss_dyn
 
 
-def train(
+
+def train(              # to check hyperparameters change
         model, 
         dataloader, 
         criterion, 
@@ -83,26 +118,7 @@ def train(
 
         optimizer.zero_grad()  # Clear previous gradients 
         batch_y_pred = regression(batch_u, model, device, regression_mode)
-        loss = criterion(batch_y, batch_y_pred)
-
-
-        if R_smooth is not None: 
-            # ---- Dynamics-matching term ----
-            # Finite differences over time, along the sequence dimension
-            dy_true = batch_y.diff(dim=1)        # (B, H-1, 1),   y_t - y_{t-1}
-            dy_pred = batch_y_pred.diff(dim=1)   # (B, H-1, 1),   ŷ_t - ŷ_{t-1}
-
-            # Weight for the derivative penalty
-            mag = dy_true.abs()
-            thresh = 0.05   # to tune
-            w_dyn = (mag / thresh).clamp(0.0, 1.0)
-
-            target_dy = w_dyn * dy_true #+ (1.0 - w_dyn) * 0.0
-            loss_dyn = ((dy_pred - target_dy) ** 2).mean()
-
-            # Total loss
-            loss += R_smooth**2 * loss_dyn
-
+        loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth)
 
         # Backpropagation
         loss.backward()
@@ -120,7 +136,7 @@ def train(
 
     return running_loss / len(dataloader)
 
-def validate(
+def validate(           # to check the best model
         model, 
         dataloader, 
         criterion, 
@@ -162,27 +178,40 @@ def validate(
                 last_predictions = model(batch_u_tmp)[:,-1,:].view(-1)
                 batch_y_pred[:,t,0] = last_predictions"""
 
-            loss = criterion(batch_y, batch_y_pred)
-
-            if R_smooth is not None:
-                # ---- Dynamics-matching term (same as in train) ----
-                dy_true = batch_y.diff(dim=1)        # (B, H-1, 1)
-                dy_pred = batch_y_pred.diff(dim=1)   # (B, H-1, 1)
-
-                mag = dy_true.abs()
-                thresh = 0.05   # use the SAME thresh as in train
-                w_dyn = (mag / thresh).clamp(0.0, 1.0)
-
-                target_dy = w_dyn * dy_true  # + (1.0 - w_dyn) * 0.0
-                loss_dyn = ((dy_pred - target_dy) ** 2).mean()
-
-                loss += R_smooth**2 * loss_dyn
-
+            loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth)
             running_loss += loss.item()
 
     return running_loss / len(dataloader)
 
-def test(
+def evaluate(           # to check over/under-fitting
+    model,
+    dataloader,
+    criterion,
+    device,
+    R_smooth: float = None,
+    regression_mode: str = "time_last",
+):
+    """
+    Generic evaluation loop: runs autoregressive regression under no_grad,
+    returns mean loss over batches. Use it for BOTH validation and test.
+    """
+    model.eval()
+    running_loss = 0.0
+
+    with torch.no_grad():
+        for batch_u, batch_y in dataloader:
+            batch_u = batch_u.to(device)
+            batch_y = batch_y.to(device)
+
+            batch_y_pred = regression(batch_u, model, device, regression_mode)
+            loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth)
+
+            running_loss += loss.item()
+
+    return running_loss / max(len(dataloader), 1)
+
+
+def test(               # to check predicted trajectories
         model,
         dataloader,
         device: torch.device,

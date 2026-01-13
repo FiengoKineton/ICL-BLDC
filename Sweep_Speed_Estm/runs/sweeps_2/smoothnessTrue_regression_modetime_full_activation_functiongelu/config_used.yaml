@@ -1,0 +1,75 @@
+compute:
+  compile: false
+  cuda_device: cuda:0
+  no_cuda: false
+  threads: 16
+data:
+  data_subdir: data
+  folders:
+  - simulated/50_percent_low_speed
+  nu: 5
+  nx: 4
+  ny: 1
+  project_root_marker: Sweep_Speed_Estm
+  seq_len: 10
+  split_seed: 42
+  test__folders:
+  - simulated/50_percent_low_speed
+  test_ratio: 0.1
+  train__folders:
+  - simulated/50_percent_low_speed
+  train_ratio: 0.7
+  val__folders:
+  - simulated/50_percent_low_speed
+  val_ratio: 0.2
+experiment:
+  mode: sweep
+  name: smoothnessTrue_regression_modetime_full_activation_functiongelu
+  output_root: runs
+  output_sweep: sweeps_2
+  resources: resources.csv
+  seed: 42
+logging:
+  checkpoint_stem: test
+  init_from: scratch
+  model_dir: out
+model:
+  activation_function: gelu
+  bias: false
+  dropout: 0.0
+  n_embd: 32
+  n_head: 8
+  n_layer: 8
+plot:
+  dpi: 160
+  export_csv: true
+  fmt: pdf
+  logy: true
+  ma: 1
+  max_T: 501
+  min_T: 1000
+  output_subdir: plots
+  print: false
+  show: false
+sweep:
+  activation_function:
+  - silu
+  - gelu
+  regression_mode:
+  - time_full
+  - time_last
+  smoothness:
+  - true
+training:
+  R: 0.5
+  batch_size: 64
+  eval_interval: 1
+  eval_iters: 1
+  fixed_lr: false
+  lr: 1.0e-05
+  max_iters: 10000
+  patience: 1000
+  regression_mode: time_full
+  smoothness: true
+  warmup_iters: 5000
+  weight_decay: 0.0

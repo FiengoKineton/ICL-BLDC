@@ -395,6 +395,463 @@ def plot_one_param_slices(
     return p1, p2
 
 
+def pick_best_tradeoff_run(
+    df: pd.DataFrame,
+    run_col: str = "run",
+    loss_col: str = "best_val_loss",
+    time_col_s: str = "_time_seconds",
+    w_loss: float = 0.7,
+    w_time: float = 0.3,
+    scaling: str = "minmax",   # "minmax" | "robust"
+    outdir: str | Path = "run_analysis_out",
+    filename_prefix: str = "tradeoff",
+    dpi: int = 200,
+    ax_pareto: Optional[plt.Axes] = None,
+    ax_score: Optional[plt.Axes] = None,
+    save: bool = True,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """
+    Same scoring, but can draw into provided axes.
+    If axes are not provided, it creates its own figure(s) and saves PDFs.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    if abs((w_loss + w_time) - 1.0) > 1e-9:
+        raise ValueError("Require w_loss + w_time == 1.0")
+
+    work = df.copy()
+    for c in [loss_col, time_col_s]:
+        if c not in work.columns:
+            raise ValueError(f"Missing column '{c}'.")
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=[loss_col, time_col_s]).copy()
+    if work.empty:
+        raise ValueError("No valid rows after cleaning.")
+
+    loss = work[loss_col].to_numpy(dtype=float)
+    time_s = work[time_col_s].to_numpy(dtype=float)
+
+    def _minmax(x: np.ndarray) -> np.ndarray:
+        lo, hi = np.nanmin(x), np.nanmax(x)
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi - lo < 1e-12:
+            return np.zeros_like(x)
+        return (x - lo) / (hi - lo)
+
+    def _robust(x: np.ndarray) -> np.ndarray:
+        med = np.nanmedian(x)
+        q1 = np.nanpercentile(x, 25)
+        q3 = np.nanpercentile(x, 75)
+        iqr = q3 - q1
+        if not np.isfinite(iqr) or iqr < 1e-12:
+            return np.zeros_like(x)
+        z = (x - med) / iqr
+        return 1.0 / (1.0 + np.exp(-z))
+
+    if scaling == "minmax":
+        loss_s = _minmax(loss)
+        time_s_scaled = _minmax(time_s)
+    elif scaling == "robust":
+        loss_s = _robust(loss)
+        time_s_scaled = _robust(time_s)
+    else:
+        raise ValueError("scaling must be 'minmax' or 'robust'")
+
+    work["_loss_scaled"] = loss_s
+    work["_time_scaled"] = time_s_scaled
+    work["_tradeoff_score"] = w_loss * loss_s + w_time * time_s_scaled
+    work["_time_hours"] = work[time_col_s] / 3600.0
+
+    scored = work.sort_values("_tradeoff_score", ascending=True).reset_index(drop=True)
+    best = scored.iloc[0]
+
+    created_fig = False
+    if ax_pareto is None or ax_score is None:
+        fig, (ax_pareto, ax_score) = plt.subplots(1, 2, figsize=(12, 4.8))
+        created_fig = True
+
+    # (1) time vs loss with best
+    ax_pareto.scatter(scored["_time_hours"].values, scored[loss_col].values, s=25)
+    ax_pareto.scatter([best["_time_hours"]], [best[loss_col]], marker="*", s=180)
+    ax_pareto.set_xlabel("Training time [hours]")
+    ax_pareto.set_ylabel("Best validation loss")
+    ax_pareto.set_title(f"Tradeoff (wL={w_loss:.2f}, wT={w_time:.2f}, {scaling})")
+    ax_pareto.grid(True)
+
+    # (2) score vs rank
+    ax_score.plot(np.arange(len(scored)), scored["_tradeoff_score"].values, marker="o", linewidth=1)
+    ax_score.set_xlabel("Rank (lower is better)")
+    ax_score.set_ylabel("Tradeoff score")
+    ax_score.set_title("Tradeoff score by rank")
+    ax_score.grid(True)
+
+    if created_fig and save:
+        fig.tight_layout()
+        p = outdir / f"{filename_prefix}_summary.pdf"
+        fig.savefig(p, dpi=dpi)
+        plt.close(fig)
+        scored.to_csv(outdir / f"{filename_prefix}_scored_table.csv", index=False)
+
+    return scored, best
+
+
+def scatter3d_hparam_grid_colored(
+    df: pd.DataFrame,
+    triples: list[tuple[str, str, str]],
+    color_col: str,
+    outdir: str | Path,
+    filename_prefix: str = "scatter3d",
+    dpi: int = 200,
+) -> list[Path]:
+    """
+    Runs scatter3d_inputs_with_output_colorbar for multiple (x,y,z) triples.
+    Returns list of saved paths.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths: list[Path] = []
+    for (x, y, z) in triples:
+        fname = f"{filename_prefix}_{x}_{y}_{z}_c_{color_col}.pdf"
+        title = f"3D scatter ({x}, {y}, {z}) colored by {color_col}"
+        p = scatter3d_inputs_with_output_colorbar(
+            df=df,
+            x_col=x, y_col=y, z_col=z,
+            c_col=color_col,
+            outdir=outdir,
+            filename=fname,
+            title=title,
+            dpi=dpi,
+        )
+        saved_paths.append(p)
+    return saved_paths
+
+
+def pareto_front_loss_time(
+    df: pd.DataFrame,
+    loss_col: str = "best_val_loss",
+    time_col_s: str = "_time_seconds",
+    run_col: str = "run",
+    outdir: str | Path = "run_analysis_out",
+    filename: str = "pareto_front_loss_time.pdf",
+    dpi: int = 200,
+    ax: Optional[plt.Axes] = None,
+    save: bool = True,
+) -> pd.DataFrame:
+    """
+    Returns Pareto-front rows minimizing (loss, time).
+    If ax is provided, plots into that axis and does NOT create/close figure.
+    If save=True and ax is None, saves a single PDF.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    work = df.copy()
+    for c in [loss_col, time_col_s]:
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=[loss_col, time_col_s]).copy()
+    if work.empty:
+        raise ValueError("No valid rows for Pareto front.")
+
+    work["_time_hours"] = work[time_col_s] / 3600.0
+    work = work.sort_values([loss_col, time_col_s], ascending=[True, True]).reset_index(drop=True)
+
+    pareto_idx = []
+    best_time = np.inf
+    for i, row in work.iterrows():
+        t = row[time_col_s]
+        if t < best_time:
+            pareto_idx.append(i)
+            best_time = t
+    pareto = work.loc[pareto_idx].copy()
+
+    created_fig = False
+    if ax is None:
+        fig = plt.figure(figsize=(6, 5))
+        ax = plt.gca()
+        created_fig = True
+
+    ax.scatter(work["_time_hours"].values, work[loss_col].values, s=25)
+    ax.scatter(pareto["_time_hours"].values, pareto[loss_col].values, s=60)
+    ax.set_xlabel("Training time [hours]")
+    ax.set_ylabel("Best validation loss")
+    ax.set_title("Pareto front: minimize (loss, time)")
+    ax.grid(True)
+
+    if created_fig and save:
+        fig.tight_layout()
+        p = outdir / filename
+        fig.savefig(p, dpi=dpi)
+        plt.close(fig)
+        pareto.to_csv(outdir / "pareto_front_table.csv", index=False)
+
+    return pareto
+
+
+def scatter2d_on_ax(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    ax: plt.Axes,
+    title: Optional[str] = None,
+    xlabel: Optional[str] = None,
+    ylabel: Optional[str] = None,
+):
+    cols = [x_col, y_col]
+    work = df.copy()
+    for c in cols:
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=cols)
+    if work.empty:
+        ax.set_title(title or f"{x_col} vs {y_col} (no data)")
+        ax.axis("off")
+        return
+
+    ax.scatter(work[x_col].values, work[y_col].values)
+    ax.set_xlabel(xlabel or x_col)
+    ax.set_ylabel(ylabel or y_col)
+    ax.set_title(title or f"{x_col} vs {y_col}")
+    ax.grid(True)
+
+
+def save_scatter2d_grid_pdf(
+    df: pd.DataFrame,
+    pairs: list[tuple[str, str, str]],  # (x_col, y_col, title)
+    outdir: str | Path,
+    filename: str = "scatters_grid.pdf",
+    ncols: int = 3,
+    dpi: int = 200,
+) -> Path:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    n = len(pairs)
+    ncols = max(1, ncols)
+    nrows = int(np.ceil(n / ncols))
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 3.6 * nrows))
+    axes = np.array(axes).reshape(-1)
+
+    for i, (x, y, t) in enumerate(pairs):
+        scatter2d_on_ax(df, x, y, ax=axes[i], title=t)
+
+    # spegni gli assi inutilizzati
+    for j in range(n, len(axes)):
+        axes[j].axis("off")
+
+    fig.tight_layout()
+    outpath = outdir / filename
+    fig.savefig(outpath, dpi=dpi)
+    plt.close(fig)
+    return outpath
+
+
+def scatter3d_on_ax(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    z_col: str,
+    c_col: str,
+    ax,
+    title: Optional[str] = None,
+    elev: float = 20,
+    azim: float = -60,
+    s: float = 30,
+):
+    cols = [x_col, y_col, z_col, c_col]
+    work = df.copy()
+    for c in cols:
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=cols)
+    if len(work) < 3:
+        ax.set_title(title or "3D scatter (no data)")
+        ax.axis("off")
+        return None
+
+    sc = ax.scatter(
+        work[x_col].to_numpy(),
+        work[y_col].to_numpy(),
+        work[z_col].to_numpy(),
+        c=work[c_col].to_numpy(),
+        s=s
+    )
+    ax.set_xlabel(x_col)
+    ax.set_ylabel(y_col)
+    ax.set_zlabel(z_col)
+    ax.set_title(title or f"({x_col},{y_col},{z_col}) by {c_col}")
+    ax.view_init(elev=elev, azim=azim)
+    return sc
+
+
+def save_scatter3d_grid_pdf(
+    df: pd.DataFrame,
+    triples: list[tuple[str, str, str, str]],  # (x,y,z,c)
+    outdir: str | Path,
+    filename: str = "scatters_3d_grid.pdf",
+    ncols: int = 2,
+    dpi: int = 200,
+    elev: float = 20,
+    azim: float = -60,
+) -> Path:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    n = len(triples)
+    ncols = max(1, ncols)
+    nrows = int(np.ceil(n / ncols))
+
+    fig = plt.figure(figsize=(6.0 * ncols, 5.2 * nrows))
+    axes = []
+    for i in range(nrows * ncols):
+        ax = fig.add_subplot(nrows, ncols, i + 1, projection="3d")
+        axes.append(ax)
+
+    mappable = None
+    for i, (x, y, z, c) in enumerate(triples):
+        sc = scatter3d_on_ax(
+            df=df, x_col=x, y_col=y, z_col=z, c_col=c,
+            ax=axes[i],
+            title=f"({x},{y},{z}) colored by {c}",
+            elev=elev, azim=azim
+        )
+        if mappable is None and sc is not None:
+            mappable = sc
+
+    # spegni assi inutilizzati
+    for j in range(n, len(axes)):
+        axes[j].axis("off")
+
+    # colorbar condivisa (se abbiamo almeno un plot valido)
+    if mappable is not None:
+        cbar = fig.colorbar(mappable, ax=axes, shrink=0.75, pad=0.02)
+        cbar.set_label(triples[0][3])  # label = c_col del primo, se li tieni coerenti
+
+    fig.tight_layout()
+    outpath = outdir / filename
+    fig.savefig(outpath, dpi=dpi)
+    plt.close(fig)
+    return outpath
+
+
+def plot_one_param_slices_on_axes(
+    df: pd.DataFrame,
+    param: str,
+    loss_ax: plt.Axes,
+    time_ax: plt.Axes,
+    loss_col: str = "best_val_loss",
+    time_col_s: str = "train_time_seconds",
+    hyperparams: Tuple[str, ...] = ("n_layer", "n_head", "n_embd", "batch_size"),
+    min_points_per_slice: int = 2,
+):
+    fixed = [p for p in hyperparams if p != param]
+    work = df.copy()
+    for c in [*hyperparams, loss_col, time_col_s]:
+        if c in work.columns:
+            work[c] = pd.to_numeric(work[c], errors="coerce")
+    work = work.dropna(subset=[param, *fixed, loss_col, time_col_s]).copy()
+    if work.empty:
+        loss_ax.set_title(f"{param}: no data")
+        time_ax.set_title(f"{param}: no data")
+        return
+
+    def _label(fixed_vals):
+        if not isinstance(fixed_vals, tuple):
+            fixed_vals = (fixed_vals,)
+        return ", ".join(f"{k}={int(v) if float(v).is_integer() else v}" for k, v in zip(fixed, fixed_vals))
+
+    # LOSS
+    for fixed_vals, g in work.groupby(fixed, dropna=False):
+        g = g.sort_values(param)
+        if len(g) < min_points_per_slice:
+            continue
+        loss_ax.plot(g[param].values, g[loss_col].values, marker="o", linewidth=1.0, label=_label(fixed_vals))
+
+    loss_ax.set_xlabel(param)
+    loss_ax.set_ylabel("Best validation loss")
+    loss_ax.set_title(f"{param}: loss (others fixed)")
+    loss_ax.grid(True)
+
+    # TIME
+    for fixed_vals, g in work.groupby(fixed, dropna=False):
+        g = g.sort_values(param)
+        if len(g) < min_points_per_slice:
+            continue
+        time_ax.plot(g[param].values, (g[time_col_s].values / 3600.0), marker="o", linewidth=1.0, label=_label(fixed_vals))
+
+    time_ax.set_xlabel(param)
+    time_ax.set_ylabel("Training time [hours]")
+    time_ax.set_title(f"{param}: time (others fixed)")
+    time_ax.grid(True)
+
+
+def save_slices_all_params_pdf(
+    df: pd.DataFrame,
+    params: list[str],
+    outdir: str | Path,
+    filename: str = "slices_all_params.pdf",
+    loss_col: str = "best_val_loss",
+    time_col_s: str = "train_time_seconds",
+    hyperparams: Tuple[str, ...] = ("n_layer", "n_head", "n_embd", "batch_size"),
+    min_points_per_slice: int = 2,
+    dpi: int = 200,
+) -> Path:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    ncols = len(params)
+    fig, axes = plt.subplots(2, ncols, figsize=(4.8 * ncols, 7.2), squeeze=False)
+
+    for j, p in enumerate(params):
+        plot_one_param_slices_on_axes(
+            df=df,
+            param=p,
+            loss_ax=axes[0, j],
+            time_ax=axes[1, j],
+            loss_col=loss_col,
+            time_col_s=time_col_s,
+            hyperparams=hyperparams,
+            min_points_per_slice=min_points_per_slice,
+        )
+
+    fig.tight_layout()
+    outpath = outdir / filename
+    fig.savefig(outpath, dpi=dpi)
+    plt.close(fig)
+    return outpath
+
+
+def save_bars_loss_time_one_pdf(
+    core_sorted_loss: pd.DataFrame,
+    core_sorted_time: pd.DataFrame,
+    run_col: str,
+    loss_col: str,
+    time_hours_col: str,
+    outdir: str | Path,
+    filename: str = "bars_loss_time.pdf",
+    dpi: int = 200,
+) -> Path:
+    outdir = Path(outdir); outdir.mkdir(parents=True, exist_ok=True)
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+
+    ax1.bar(core_sorted_loss[run_col].astype(str), core_sorted_loss[loss_col].values)
+    ax1.set_title("Best validation loss per run (lower is better)")
+    ax1.set_ylabel("Best validation loss")
+    ax1.tick_params(axis="x", rotation=60, labelsize=8)
+
+    ax2.bar(core_sorted_time[run_col].astype(str), core_sorted_time[time_hours_col].values)
+    ax2.set_title("Training time per run")
+    ax2.set_ylabel("Training time [hours]")
+    ax2.tick_params(axis="x", rotation=60, labelsize=8)
+
+    fig.tight_layout()
+    p = Path(outdir) / filename
+    fig.savefig(p, dpi=dpi)
+    plt.close(fig)
+    return p
+
+
+
 # ----------------------------
 # Main analysis
 # ----------------------------
@@ -510,7 +967,7 @@ def analyze_runs_csv(
     plt.close(fig)
     saved.append(p)
 
-    # Plot 3: Scatter time vs loss
+    """# Plot 3: Scatter time vs loss
     fig = plt.figure(figsize=(6, 5))
     plt.scatter(core["_time_hours"].values, core[val_loss_col].values)
     plt.xlabel("Training time [hours]")
@@ -547,7 +1004,7 @@ def analyze_runs_csv(
             p = outdir / f"scatter_{hp}_vs_time.pdf"
             fig.savefig(p, dpi=200)
             plt.close(fig)
-            saved.append(p)
+            saved.append(p)"""
 
     # Correlations (Pearson) on numeric columns
     numeric_cols = [c for c in ["n_layer", "n_head", "n_embd", "batch_size"] if c in core.columns]
@@ -564,6 +1021,114 @@ def analyze_runs_csv(
     cleaned_path = outdir / "cleaned_runs_table.csv"
     cleaned.to_csv(cleaned_path, index=False)
     saved.append(cleaned_path)
+
+
+    # =========================
+    # Compact reporting (few PDFs)
+    # =========================
+
+    # (A) One PDF: tradeoff summary (2 subplots)
+    scored, best_tradeoff = pick_best_tradeoff_run(
+        df=cleaned,
+        run_col=run_col,
+        loss_col=val_loss_col,
+        time_col_s="_time_seconds",
+        w_loss=0.75,
+        w_time=0.25,
+        scaling="minmax",
+        outdir=outdir,
+        filename_prefix="tradeoff_w075_w025",
+        save=True,   # saves ONE PDF: tradeoff_w075_w025_summary.pdf
+    )
+    saved.append(Path(outdir) / "tradeoff_w075_w025_summary.pdf")
+    saved.append(Path(outdir) / "tradeoff_w075_w025_scored_table.csv")
+
+    # (B) One PDF: Pareto
+    pareto = pareto_front_loss_time(
+        df=cleaned,
+        loss_col=val_loss_col,
+        time_col_s="_time_seconds",
+        run_col=run_col,
+        outdir=outdir,
+        filename="pareto_front_loss_time.pdf",
+        save=True
+    )
+    saved.append(Path(outdir) / "pareto_front_loss_time.pdf")
+    saved.append(Path(outdir) / "pareto_front_table.csv")
+
+
+    # --- 3D scatters colored by metrics (if present) ---
+    paths = scatter3d_hparam_grid_colored(
+        df=cleaned,
+        triples=[
+            ("n_layer", "n_head", "n_embd"),
+            ("n_layer", "n_head", "batch_size"),
+            ("n_head", "n_embd", "batch_size"),
+        ],
+        color_col=val_loss_col,
+        outdir=outdir,
+        filename_prefix="scatter3d_val_loss",
+    )
+    saved.extend(paths)
+
+    paths = scatter3d_hparam_grid_colored(
+        df=cleaned,
+        triples=[
+            ("n_layer", "n_head", "n_embd"),
+            ("n_layer", "n_head", "batch_size"),
+            ("n_head", "n_embd", "batch_size"),
+        ],
+        color_col="_time_seconds",
+        outdir=outdir,
+        filename_prefix="scatter3d_time_seconds",
+    )
+    saved.extend(paths)
+
+    pairs = [("_time_hours", val_loss_col, "Time [h] vs Val loss")]
+    for hp in ["n_layer", "n_head", "n_embd", "batch_size"]:
+        if hp in cleaned.columns and cleaned[hp].notna().sum() >= 2:
+            pairs.append((hp, val_loss_col, f"{hp} vs val loss"))
+            pairs.append((hp, "_time_hours", f"{hp} vs time [h]"))
+
+    p_grid = save_scatter2d_grid_pdf(
+        df=cleaned,
+        pairs=pairs,
+        outdir=outdir,
+        filename="scatters_2d_grid.pdf",
+        ncols=3,
+    )
+    saved.append(p_grid)
+
+    """triples = [
+        ("n_layer", "n_head", "n_embd", val_loss_col),
+        ("n_layer", "n_head", "batch_size", val_loss_col),
+        ("n_head", "n_embd", "batch_size", val_loss_col),
+        ("n_layer", "n_head", "n_embd", "_time_hours"),
+        ("n_layer", "n_head", "batch_size", "_time_hours"),
+        ("n_head", "n_embd", "batch_size", "_time_hours"),
+    ]
+    p3dgrid = save_scatter3d_grid_pdf(
+        df=cleaned,
+        triples=triples,
+        outdir=outdir,
+        filename="scatters_3d_grid_color_loss.pdf",
+        ncols=2,
+    )
+    saved.append(p3dgrid)"""
+
+    cleaned_for_slices = cleaned.rename(columns={"_time_seconds": "train_time_seconds"})
+
+    p_slices = save_slices_all_params_pdf(
+        df=cleaned_for_slices,
+        params=["n_layer", "n_head", "n_embd", "batch_size"],
+        outdir=outdir,
+        filename="slices_all_params.pdf",
+        loss_col=val_loss_col,
+        time_col_s="train_time_seconds",
+        min_points_per_slice=2,
+    )
+    saved.append(p_slices)
+
 
     # Example integration inside analyze_runs_csv(...) after 'cleaned' is built:
     effects = one_param_change_effects(
@@ -582,7 +1147,7 @@ def analyze_runs_csv(
     print("\n=== One-param change summary ===")
     print(summary)
 
-    # Example: layers effect with heads/embd/batch fixed
+    """# Example: layers effect with heads/embd/batch fixed
     for p in ["n_layer", "n_head", "n_embd", "batch_size"]:
         plot_one_param_slices(
             df=cleaned.rename(columns={
@@ -594,7 +1159,7 @@ def analyze_runs_csv(
             time_col_s="train_time_seconds",
             outdir=outdir,
             min_points_per_slice=2,  # set to 3 if you literally want “only the 3-point cases”
-        )
+        )"""
 
 
     # 3D scatter: pick any 3 inputs + 1 output to color
@@ -637,7 +1202,7 @@ def analyze_runs_csv(
 
 
 """
-python run_analysis.py --csv <name_sweep>.csv
+python plot_sweep_analisys.py --csv <name_sweep>.csv --base runs/<sweep_folder>
 """
 
 if __name__ == "__main__":

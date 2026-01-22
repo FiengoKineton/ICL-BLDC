@@ -1,0 +1,3 @@
+run,best_val_loss,_time_seconds,_time_hours,n_layer,n_head,n_embd,batch_size
+n_layer8_n_head8_n_embd32_batch_size64,0.0006299590750131,37951.0,10.541944444444445,8,8,32,64
+n_layer4_n_head8_n_embd16,0.0027747251442633,36678.0,10.188333333333333,4,8,16,128

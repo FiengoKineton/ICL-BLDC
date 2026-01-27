@@ -12,10 +12,17 @@ import pandas as pd
 import psutil
 
 try:
-    import pynvml
+    # Preferred (maintained) package name
+    import pynvml  # provided by nvidia-ml-py
     _HAS_NVML = True
 except Exception:
-    _HAS_NVML = False
+    try:
+        # Backward compat if someone still has deprecated pynvml installed
+        import pynvml  # type: ignore
+        _HAS_NVML = True
+    except Exception:
+        _HAS_NVML = False
+
 
 
 @dataclass

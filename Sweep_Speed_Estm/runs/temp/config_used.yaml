@@ -14,7 +14,7 @@ data:
   seq_len: 10
   split_seed: 42
   test__folders:
-  - simulated/50_percent_low_speed
+  - true/CL_experiments_double_sensor/inertia07_ki-0.0061-kp-11.8427
   test_ratio: 0.1
   train__folders:
   - simulated/50_percent_low_speed
@@ -34,9 +34,9 @@ logging:
   init_from: scratch
   model_dir: out
 model:
-  activation_function: silu
+  activation_function: gelu
   bias: false
-  dropout: 0.0
+  dropout: 0.05
   n_embd: 32
   n_head: 8
   n_layer: 8
@@ -49,8 +49,12 @@ plot:
   max_T: 501
   min_T: 1000
   output_subdir: plots
-  print: false
+  print: true
   show: false
+simulations:
+  downsample_factor: 10
+  dt: 0.01
+  fs: 100
 sweep:
   R:
   - 0.1
@@ -95,10 +99,12 @@ training:
   eval_interval: 1
   eval_iters: 1
   fixed_lr: false
+  loss: TimeWeightedMSE
+  loss_mode: exp
   lr: 1.0e-05
-  max_iters: 2
-  patience: 10000
-  regression_mode: time_full
+  max_iters: 1
+  patience: 1000
+  regression_mode: time_last
   smoothness: true
   warmup_iters: 5000
   weight_decay: 0.0

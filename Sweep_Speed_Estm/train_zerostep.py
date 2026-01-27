@@ -27,8 +27,8 @@ def run_single(cfg: Dict[str, Any]):
     root = Path(cfg["experiment"]["output_root"])
     run_dir = root / exp_name
 
-    best, train_time = run_single_experiment(cfg, train_ds, val_ds, test_ds, run_dir, exp_name)
-    print(f"[main] Single run finished, best_val_loss={best:.4e}, train_time={train_time:.2f}s\n")
+    best_val, train_time, test_loss = run_single_experiment(cfg, train_ds, val_ds, test_ds, run_dir, exp_name)
+    print(f"[main] Single run finished, best_val_loss={best_val:.4e}, test_loss={test_loss:.4e}, train_time={train_time:.2f}s\n")
 
 
 def run_sweep(cfg: Dict[str, Any]):
@@ -71,9 +71,9 @@ def run_sweep(cfg: Dict[str, Any]):
 
         run_dir = root / name
         print(f"[main] Running sweep combo {i}: {name}\n")
-        best_val_loss, train_time = run_single_experiment(cfg_run, train_ds, val_ds, test_ds, run_dir, name)
+        best_val_loss, train_time, test_loss = run_single_experiment(cfg_run, train_ds, val_ds, test_ds, run_dir, name)
 
-        row = {"run": name, "best_val_loss": best_val_loss, "train_time_seconds": train_time}
+        row = {"run": name, "best_val_loss": best_val_loss, "train_time_seconds": train_time, "test_loss": test_loss}
         row.update(overrides)
         results_rows.append(row)
 

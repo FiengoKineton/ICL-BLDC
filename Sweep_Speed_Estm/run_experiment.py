@@ -1,12 +1,13 @@
 # run_experiment.py     | SET (leave it as it is)
 
-import os, time, torch, torch.nn as nn, numpy as np, pandas as pd
+import os, time, torch, json, torch.nn as nn, numpy as np, pandas as pd
 
 from pathlib import Path
 from functools import partial
 from copy import deepcopy
 from typing import Dict, Any, List
 from torch.utils.data import DataLoader
+from datetime import timedelta
 
 from engine import train, validate, evaluate
 from engine_utils import build_device, build_model, configure_optimizer, warmup_cosine_lr, TimeWeightedMSELoss
@@ -14,6 +15,117 @@ from plot_testing import run_testing
 from plot_training import run_training_plots
 from resource_monitor import ResourceMonitor
 
+
+
+def _format_seconds(seconds: float) -> str:
+    try:
+        return str(timedelta(seconds=int(round(seconds))))
+    except Exception:
+        return f"{seconds:.3f}s"
+
+
+def save_run_summary(
+    run_dir: Path,
+    *,
+    exp_name: str,
+    cfg: Dict[str, Any],
+    best_val_loss: float,
+    best_epoch: int,
+    train_time: float,
+    test_loss: float,
+    final_epoch: int,
+    num_params: int,
+    device_type: str,
+    history_len: int,
+    resources_csv_name: str,
+    checkpoint_stem: str,
+) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_training = cfg.get("training", {})
+    cfg_model = cfg.get("model", {})
+    cfg_exp = cfg.get("experiment", {})
+    cfg_data = cfg.get("data", {})
+
+    summary = {
+        "exp_name": exp_name,
+        "seed": cfg_exp.get("seed", None),
+
+        "best_val_loss": float(best_val_loss),
+        "best_epoch": int(best_epoch),
+        "test_loss": float(test_loss),
+
+        "train_time_seconds": float(train_time),
+        "train_time_pretty": _format_seconds(train_time),
+
+        "final_epoch": int(final_epoch),
+        "epochs_ran": int(history_len),
+
+        "device_type": device_type,
+        "num_params": int(num_params),
+
+        # Key training knobs (so you can compare runs quickly)
+        "batch_size": cfg_training.get("batch_size", None),
+        "lr": cfg_training.get("lr", None),
+        "max_iters": cfg_training.get("max_iters", None),
+        "patience": cfg_training.get("patience", None),
+        "eval_interval": cfg_training.get("eval_interval", None),
+        "loss": cfg_training.get("loss", None),
+        "loss_mode": cfg_training.get("loss_mode", None),
+        "smoothness": cfg_training.get("smoothness", None),
+        "regression_mode": cfg_training.get("regression_mode", None),
+
+        # Model shape
+        "n_layer": cfg_model.get("n_layer", None),
+        "n_head": cfg_model.get("n_head", None),
+        "n_embd": cfg_model.get("n_embd", None),
+
+        # Data shape hints
+        "seq_len": cfg_data.get("seq_len", None),
+        "nu": cfg_data.get("nu", None),
+
+        # Artifacts
+        "artifacts": {
+            "history_csv": "history.csv",
+            "resources_csv": resources_csv_name,
+            "config_used": "config_used.yaml",
+            "checkpoint_best": f"{checkpoint_stem}_best.pt",
+            "checkpoint_last": f"{checkpoint_stem}_last.pt",
+        },
+    }
+
+    # JSON (machine-friendly)
+    with (run_dir / "summary.json").open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+    # TXT (human-friendly)
+    lines = [
+        f"exp_name: {summary['exp_name']}",
+        f"seed: {summary['seed']}",
+        "",
+        f"best_val_loss: {summary['best_val_loss']:.6e}",
+        f"best_epoch: {summary['best_epoch']}",
+        f"test_loss: {summary['test_loss']:.6e}",
+        "",
+        f"train_time: {summary['train_time_pretty']} ({summary['train_time_seconds']:.3f}s)",
+        f"final_epoch: {summary['final_epoch']}",
+        f"epochs_ran: {summary['epochs_ran']}",
+        "",
+        f"device_type: {summary['device_type']}",
+        f"num_params: {summary['num_params']}",
+        "",
+        "artifacts:",
+        f"  - {summary['artifacts']['history_csv']}",
+        f"  - {summary['artifacts']['resources_csv']}",
+        f"  - {summary['artifacts']['config_used']}",
+        f"  - {summary['artifacts']['checkpoint_best']}",
+        f"  - {summary['artifacts']['checkpoint_last']}",
+    ]
+    with (run_dir / "summary.txt").open("w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+# Core function: trains one model, saves checkpoints + history.
 
 def run_single_experiment(
     cfg: Dict[str, Any],
@@ -242,7 +354,7 @@ def run_single_experiment(
         yaml.safe_dump(cfg, f)
 
 
-    run_testing(
+    test_loss = run_testing(
         run_dir=run_dir,
         split="test",
         epoch=best_epoch,      # you can leave this None since it's only at the end
@@ -264,5 +376,23 @@ def run_single_experiment(
         show=False,
     )
 
+    # ---- Save run summary (JSON + TXT) ----
+    save_run_summary(
+        run_dir=run_dir,
+        exp_name=exp_name,
+        cfg=cfg,
+        best_val_loss=best_val_loss,
+        best_epoch=best_epoch,
+        train_time=train_time,
+        test_loss=test_loss,
+        final_epoch=epoch,
+        num_params=num_params,
+        device_type=device_type,
+        history_len=len(history),
+        resources_csv_name=res_csv,
+        checkpoint_stem=cfg_logging["checkpoint_stem"],
+    )
+
+
     print(f"\n\n[run] Done. best_val_loss={best_val_loss:.4e} at epoch {best_epoch} (time: {train_time})")
-    return float(best_val_loss), float(train_time)
+    return float(best_val_loss), float(train_time), float(test_loss)

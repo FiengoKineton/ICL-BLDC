@@ -456,6 +456,7 @@ def run_testing(
     )
 
     # 6) Loop over experiments
+    loss = []
     regression_mode = cfg.get("training", {}).get("regression_mode", "time_last")
     dl = DataLoader(
         ds, 
@@ -486,6 +487,9 @@ def run_testing(
             max_T=cfg.get("plotting", {}).get("max_T", 501),
         )
         if print_flag: print(f"[test]   -> saved {fname}")
+        loss.append(mse)
+    
+    return float(np.mean(loss))
 
 
 # ---------------------------------------------------------------------

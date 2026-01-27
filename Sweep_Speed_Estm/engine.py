@@ -3,85 +3,7 @@
 import torch, sys
 from typing import Optional
 from dataset import reverse_normalization
-
-
-def regression(
-        batch_u, model, device, 
-        regression_mode: str = "time_last"
-        ):
-    # Create a copy of batch_u to work with, and set the velocity column (index 4) to zero
-    batch_u_copy = batch_u.clone()
-    batch_u_copy[:,:,4] = 0 
-
-    if regression_mode != "one_step":
-        # Store predictions
-        # Initialize ω̂_0 = 0 for all sequences in the batch
-        # Requires grad=True so gradients can flow through the unrolled recursion.
-        last_predictions = torch.zeros(batch_u_copy.shape[0], device=device, requires_grad=True) # batch_u_copy.shape[0] is the batch size
-        batch_y_pred_list = []  # list to accumulate outputs
-
-        # Simulate step by step
-        for t in range(batch_u_copy.shape[1]):
-            # Inject previous estimate into the 5th channel at current step t
-            # u_step[:, :t+1, :] provides a strictly-causal prefix to the Transformer
-            # ŷ_t is obtained by taking the last time position of the model output
-            batch_u_step = batch_u_copy.clone()  # Clone to avoid modification issues
-            batch_u_step[:, t, 4] = last_predictions  # Inject last predictions
-            batch_u_tmp = batch_u_step[:, :t+1, :]  # Take relevant time slice
-
-            # Forward pass
-            prediction_full = model(batch_u_tmp)
-            last_predictions = prediction_full[:, -1, :].view(-1)  # Ensure shape matches
-
-            batch_y_pred_list.append(last_predictions.unsqueeze(1))  # Store prediction
-
-
-
-        if regression_mode == "time_last":
-            # Concatenate all predictions along time dimension
-            batch_y_pred = torch.cat(batch_y_pred_list, dim=1).unsqueeze(-1)  # Ensure shape matches batch_y
-            # batch_y_pred: concatenated per-step predictions ŷ_{1:H} with shape (B,H,1)
-            # Criterion compares full sequences (teacher-free schedule because we feed our own ŷ).
-        elif regression_mode == "time_full":
-            batch_y_pred = prediction_full
-        
-    else: 
-        # One-step prediction mode: directly predict from full input sequence
-        batch_y_pred = model(batch_u_copy[:,:,:-1])
-    
-    return batch_y_pred
-
-def smooth_dynamics_loss(
-    y_true: torch.Tensor,
-    y_pred: torch.Tensor,
-    R_smooth: float,
-    thresh: float = 0.01,
-    ):
-    """
-    Computes the dynamics-matching regularization term.
-
-    Args:
-        y_true: (B, H, 1)
-        y_pred: (B, H, 1)
-        R_smooth: regularization weight (scalar)
-        thresh: threshold for weighting the derivative penalty
-
-    Returns:
-        scalar tensor (already scaled by R_smooth^2)
-    """
-    if R_smooth is None or R_smooth == 0.0:
-        return 0.0
-
-    dy_true = y_true.diff(dim=1)      # (B, H-1, 1)
-    dy_pred = y_pred.diff(dim=1)      # (B, H-1, 1)
-
-    mag = dy_true.abs()
-    w_dyn = (mag / thresh).clamp(0.0, 1.0)
-
-    target_dy = w_dyn * dy_true #+ (1.0 - w_dyn) * 0.0
-    loss_dyn = ((dy_pred - target_dy) ** 2).mean()
-
-    return (R_smooth ** 2) * loss_dyn
+from engine_utils import _regression, regression, smooth_dynamics_loss
 
 
 
@@ -93,7 +15,9 @@ def train(              # to check hyperparameters change
         device, 
         R_smooth: 
         float = None, 
-        regression_mode: str = "time_last"
+        regression_mode: str = "time_last",
+        teacher_prob: float = 0.0,
+        ss_mode: str = "stochastic",
         ):
     '''
     Trains the model over the given data batches. Along the windows of length h, the model estimates recursively the output omega_hat_t, with t = 1...h.
@@ -117,8 +41,8 @@ def train(              # to check hyperparameters change
         batch_u, batch_y = batch_u.to(device), batch_y.to(device)
 
         optimizer.zero_grad()  # Clear previous gradients 
-        batch_y_pred = regression(batch_u, model, device, regression_mode)
-        loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth)
+        batch_y_pred = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode)
+        loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth, criterion=criterion)
 
         # Backpropagation
         loss.backward()
@@ -142,7 +66,9 @@ def validate(           # to check the best model
         criterion, 
         device, 
         R_smooth: float = None, 
-        regression_mode: str = "time_last"
+        regression_mode: str = "time_last",
+        teacher_prob: float = 0.0,
+        ss_mode: str = "stochastic",
         ):
     '''
     Evaluates the model over the given data batches. Along the windows of length h, the model estimates recursively the output omega_hat_t, with t = 1...h.
@@ -160,7 +86,7 @@ def validate(           # to check the best model
             batch_u, batch_y = batch
             batch_u, batch_y = batch_u.to(device), batch_y.to(device)
 
-            batch_y_pred = regression(batch_u, model, device, regression_mode)
+            batch_y_pred = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode)
             """batch_y_pred = torch.zeros_like(batch_y)
         
             # create a copy of batch_u to work with, then overwrite the real velocity (symbolic, may not be needed for the code)
@@ -178,7 +104,7 @@ def validate(           # to check the best model
                 last_predictions = model(batch_u_tmp)[:,-1,:].view(-1)
                 batch_y_pred[:,t,0] = last_predictions"""
 
-            loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth)
+            loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth, criterion=criterion)
             running_loss += loss.item()
 
     return running_loss / len(dataloader)
@@ -190,6 +116,8 @@ def evaluate(           # to check over/under-fitting
     device,
     R_smooth: float = None,
     regression_mode: str = "time_last",
+        teacher_prob: float = 0.0,
+        ss_mode: str = "stochastic",
 ):
     """
     Generic evaluation loop: runs autoregressive regression under no_grad,
@@ -203,8 +131,8 @@ def evaluate(           # to check over/under-fitting
             batch_u = batch_u.to(device)
             batch_y = batch_y.to(device)
 
-            batch_y_pred = regression(batch_u, model, device, regression_mode)
-            loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth)
+            batch_y_pred = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode)
+            loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth, criterion=criterion)
 
             running_loss += loss.item()
 
@@ -272,7 +200,7 @@ def test(               # to check predicted trajectories
             # Concatenate predictions along time dimension and add output dim
             batch_y_pred = torch.cat(batch_y_pred_list, dim=1).unsqueeze(-1)  # (B, T, 1)"""
 
-            batch_y_pred = regression(batch_u, model, device, regression_mode)
+            batch_y_pred = _regression(batch_u, model, device, regression_mode)
 
             all_u_true.append(batch_u)
             all_y_true.append(batch_y)

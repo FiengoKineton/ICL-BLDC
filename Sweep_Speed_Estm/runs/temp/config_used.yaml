@@ -51,6 +51,12 @@ plot:
   output_subdir: plots
   print: true
   show: false
+scheduled_sampling:
+  decay_epochs: 300
+  enabled: true
+  mode: stochastic
+  p0: 1.0
+  p_min: 0.0
 simulations:
   downsample_factor: 10
   dt: 0.01
@@ -102,7 +108,7 @@ training:
   loss: TimeWeightedMSE
   loss_mode: exp
   lr: 1.0e-05
-  max_iters: 1
+  max_iters: 2
   patience: 1000
   regression_mode: time_last
   smoothness: true

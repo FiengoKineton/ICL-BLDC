@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from datetime import timedelta
 
 from engine import train, validate, evaluate
-from engine_utils import build_device, build_model, configure_optimizer, warmup_cosine_lr, TimeWeightedMSELoss
+from engine_utils import build_device, build_model, configure_optimizer, teacher_prob_schedule, warmup_cosine_lr, TimeWeightedMSELoss
 from plot_testing import run_testing
 from plot_training import run_training_plots
 from resource_monitor import ResourceMonitor
@@ -150,6 +150,7 @@ def run_single_experiment(
     cfg_training = deepcopy(cfg["training"])
     cfg_compute = deepcopy(cfg["compute"])
     cfg_logging = deepcopy(cfg["logging"])
+    ss_cfg = cfg.get("scheduled_sampling", {})
 
     # Slightly stupid thing: attach compile flag to model
     cfg_model["compile"] = cfg_compute.get("compile", False)
@@ -159,6 +160,13 @@ def run_single_experiment(
     seed = cfg_exp.get("seed", 42)
     torch.manual_seed(seed)
     np.random.seed(seed)
+
+    # Scheduled sampling params
+    ss_enabled = bool(ss_cfg.get("enabled", False))
+    ss_mode = ss_cfg.get("mode", "stochastic")
+    p0 = float(ss_cfg.get("p0", 1.0))
+    decay_epochs = int(ss_cfg.get("decay_epochs", 0))
+    p_min = float(ss_cfg.get("p_min", 0.0))
 
     # Derived parameters
     cfg_data["seq_len"] = cfg_data.get("seq_len", 10)
@@ -251,10 +259,19 @@ def run_single_experiment(
             lr_epoch = cfg_training["lr"]
         optimizer.param_groups[0]["lr"] = lr_epoch
 
+        if ss_enabled:
+            teacher_prob = teacher_prob_schedule(
+                epoch=epoch,
+                p0=p0,
+                decay_epochs=decay_epochs,
+                p_min=p_min,
+            )
+        else:
+            teacher_prob = 0.0
 
-        train_loss = train(model, train_dl, criterion, optimizer, device, R_smooth, regression_mode)
-        val_loss = validate(model, val_dl, criterion, device, R_smooth, regression_mode) if (epoch % eval_interval) == 0 else np.nan
-        test_loss  = evaluate(model, test_dl, criterion, device, R_smooth, regression_mode)
+        train_loss = train(model, train_dl, criterion, optimizer, device, R_smooth, regression_mode, teacher_prob, ss_mode)
+        val_loss = validate(model, val_dl, criterion, device, R_smooth, regression_mode, teacher_prob, ss_mode) if (epoch % eval_interval) == 0 else np.nan
+        test_loss = evaluate(model, test_dl, criterion, device, R_smooth, regression_mode, teacher_prob, ss_mode) if (epoch % eval_interval) == 0 else np.nan
 
         # Track
         row = {
@@ -273,6 +290,7 @@ def run_single_experiment(
                     f.write(r"\hline" + "\n")
                     f.write(r"\textbf{Metric} & \textbf{Value} \\\\" + "\n")
                     f.write(f"Exp Name & {exp_name} \\\\ \n")
+                    f.write(f"Directory & {run_dir} \\\\ \n")
                     f.write(f"Epoch & {epoch} \\\\ \n")
                     f.write(f"Train Loss & {train_loss:.4e} \\\\ \n")
                     f.write(f"Val Loss & {val_loss:.4e} \\\\ \n")

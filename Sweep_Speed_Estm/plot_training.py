@@ -115,6 +115,11 @@ def load_losses_from_ckpt(path: Path) -> Dict[str, np.ndarray]:
             [row.get("val_loss", np.nan) for row in hist],
             dtype=float,
         )
+        test = np.asarray(
+            [row.get("test_loss", np.nan) for row in hist], 
+            dtype=float,
+        )
+
 
     # 2) Backward compatibility: old keys
     if train is None or val is None or len(train) == 0 or len(val) == 0:
@@ -137,6 +142,7 @@ def load_losses_from_ckpt(path: Path) -> Dict[str, np.ndarray]:
             )
         train = df["train_loss"].to_numpy(dtype=float)
         val = df["val_loss"].to_numpy(dtype=float)
+        test = df["test_loss"].to_numpy(dtype=float) if "test_loss" in df.columns else None
 
     # Align lengths if mismatched
     n = min(len(train), len(val))
@@ -179,8 +185,9 @@ def build_losses_from_history(history: List[Dict[str, Any]]) -> Dict[str, np.nda
 
     train = np.asarray([row.get("train_loss", np.nan) for row in history], dtype=float)
     val = np.asarray([row.get("val_loss", np.nan) for row in history], dtype=float)
-    n = min(len(train), len(val))
-    train, val = train[:n], val[:n]
+    test = np.asarray([row.get("test_loss", np.nan) for row in history], dtype=float) if "test_loss" in history[0] else None
+    n = min(len(train), len(val), len(test) if test is not None else float("inf"))
+    train, val, test = train[:n], val[:n], test[:n] if test is not None else None
 
     best_epoch = int(np.nanargmin(val)) if n > 0 else -1
     best_val_loss = float(val[best_epoch]) if best_epoch >= 0 else float("nan")
@@ -188,6 +195,7 @@ def build_losses_from_history(history: List[Dict[str, Any]]) -> Dict[str, np.nda
     out: Dict[str, Any] = {
         "train": train,
         "val": val,
+        "test": test,
         "best_val_loss": best_val_loss,
         "best_epoch": best_epoch,
         "iter_num": n,
@@ -397,12 +405,17 @@ def plot_losses(
         epochs = np.arange(1, n + 1)
         train = data["train"]
         val = data["val"]
+        test = data.get("test", None)
         if ma and ma > 1:
             train = moving_average(train, ma)
             val = moving_average(val, ma)
+            test = moving_average(test, ma) if test is not None else None
 
         ax1.plot(epochs, train, linestyle="-", linewidth=1.5, label=f"{label} – train")
         ax1.plot(epochs, val, linestyle="--", linewidth=1.5, label=f"{label} – val")
+        if test is not None:
+            ax1.plot(epochs, test, linestyle=":", linewidth=1.5, label=f"{label} – test")
+
 
         # Mark best val epoch
         if 0 <= data["best_epoch"] < n and math.isfinite(data["best_val_loss"]):

@@ -40,7 +40,7 @@ model:
 
 training:
   batch_size: 64                                    # 128 as default 
-  max_iters: 10000
+  max_iters: 2 #10000
   lr: 1.0e-5
   warmup_iters: 5000
   weight_decay: 0.0
@@ -95,4 +95,11 @@ plot:
   fmt: "pdf"
   min_T: 1000                                       # 0 if you want to start from t=0
   max_T: 501                                        # None is you want to plot the entire lenght
+
+scheduled_sampling:
+  enabled: true
+  mode: "stochastic"     # "stochastic" or "soft"
+  p0: 1.0                # initial teacher prob
+  decay_epochs: 300      # epochs to decay to 0
+  p_min: 0.0             # floor (usually 0)
 

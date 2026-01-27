@@ -2,7 +2,7 @@
 
 import math, torch, torch.nn as nn
 from transformer_zerostep import GPTConfig, GPT
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 
@@ -149,4 +149,156 @@ class TimeWeightedMSELoss(nn.Module):
         # weighted mean over time, then mean over batch
         loss = (mse_t * w).sum(dim=1).mean()
         return loss
+
+
+
+def teacher_prob_schedule(epoch: int, p0: float, decay_epochs: int, p_min: float = 0.0) -> float:
+    """Linear decay from p0 to p_min over decay_epochs, then stays at p_min."""
+    if decay_epochs is None or decay_epochs <= 0:
+        return float(p_min)
+    frac = min(1.0, max(0.0, epoch / float(decay_epochs)))
+    p = p0 * (1.0 - frac)
+    return float(max(p_min, p))
+
+def regression(
+        batch_u,
+        model,
+        device,
+        regression_mode: str = "time_last",
+        batch_y: torch.Tensor | None = None,
+        teacher_prob: float = 0.0,
+        ss_mode: str = "stochastic",   # "stochastic" or "soft"
+):
+    # Create a copy of batch_u and zero the feedback channel
+    batch_u_copy = batch_u.clone()
+    batch_u_copy[:, :, 4] = 0
+
+    if regression_mode != "one_step":
+
+        # Initialize ω̂_0 = 0
+        last_predictions = torch.zeros(
+            batch_u_copy.shape[0],
+            device=device,
+            requires_grad=True
+        )
+
+        batch_y_pred_list = []
+
+        for t in range(batch_u_copy.shape[1]):
+
+            batch_u_step = batch_u_copy.clone()
+
+            if t > 0 and teacher_prob > 0.0 and batch_y is not None:
+                y_prev = batch_y[:, t-1, 0]
+
+                if ss_mode == "stochastic":
+                    m = (torch.rand_like(last_predictions) < teacher_prob).float()
+                    inject = m * y_prev + (1.0 - m) * last_predictions
+                elif ss_mode == "soft":
+                    inject = teacher_prob * y_prev + (1.0 - teacher_prob) * last_predictions
+                else:
+                    raise ValueError(f"Unknown ss_mode: {ss_mode}")
+            else:
+                inject = last_predictions
+
+            batch_u_step[:, t, 4] = inject
+            batch_u_tmp = batch_u_step[:, :t+1, :]
+
+            prediction_full = model(batch_u_tmp)
+            last_predictions = prediction_full[:, -1, :].view(-1)
+
+            batch_y_pred_list.append(last_predictions.unsqueeze(1))
+
+        if regression_mode == "time_last":
+            batch_y_pred = torch.cat(batch_y_pred_list, dim=1).unsqueeze(-1)
+        elif regression_mode == "time_full":
+            batch_y_pred = prediction_full
+
+    else:
+        batch_y_pred = model(batch_u_copy[:, :, :-1])
+
+    return batch_y_pred
+
+def smooth_dynamics_loss(
+    y_true: torch.Tensor,
+    y_pred: torch.Tensor,
+    R_smooth: float,
+    thresh: float = 0.01,
+    criterion: Optional[torch.nn.Module] = None,
+    ):
+    """
+    Computes the dynamics-matching regularization term.
+
+    Args:
+        y_true: (B, H, 1)
+        y_pred: (B, H, 1)
+        R_smooth: regularization weight (scalar)
+        thresh: threshold for weighting the derivative penalty
+
+    Returns:
+        scalar tensor (already scaled by R_smooth^2)
+    """
+    if R_smooth is None or R_smooth == 0.0:
+        return 0.0
+
+    dy_true = y_true.diff(dim=1)      # (B, H-1, 1)
+    dy_pred = y_pred.diff(dim=1)      # (B, H-1, 1)
+
+    mag = dy_true.abs()
+    w_dyn = (mag / thresh).clamp(0.0, 1.0)
+
+    target_dy = w_dyn * dy_true #+ (1.0 - w_dyn) * 0.0
+    try:    
+        loss_dyn = criterion(target_dy, dy_pred)
+    except Exception as e:
+        loss_dyn = ((dy_pred - target_dy) ** 2).mean()
+
+    return (R_smooth ** 2) * loss_dyn
+
+def _regression(
+        batch_u, model, device, 
+        regression_mode: str = "time_last"
+        ):
+    # Create a copy of batch_u to work with, and set the velocity column (index 4) to zero
+    batch_u_copy = batch_u.clone()
+    batch_u_copy[:,:,4] = 0 
+
+    if regression_mode != "one_step":
+        # Store predictions
+        # Initialize ω̂_0 = 0 for all sequences in the batch
+        # Requires grad=True so gradients can flow through the unrolled recursion.
+        last_predictions = torch.zeros(batch_u_copy.shape[0], device=device, requires_grad=True) # batch_u_copy.shape[0] is the batch size
+        batch_y_pred_list = []  # list to accumulate outputs
+
+        # Simulate step by step
+        for t in range(batch_u_copy.shape[1]):
+            # Inject previous estimate into the 5th channel at current step t
+            # u_step[:, :t+1, :] provides a strictly-causal prefix to the Transformer
+            # ŷ_t is obtained by taking the last time position of the model output
+            batch_u_step = batch_u_copy.clone()  # Clone to avoid modification issues
+            batch_u_step[:, t, 4] = last_predictions  # Inject last predictions
+            batch_u_tmp = batch_u_step[:, :t+1, :]  # Take relevant time slice
+
+            # Forward pass
+            prediction_full = model(batch_u_tmp)
+            last_predictions = prediction_full[:, -1, :].view(-1)  # Ensure shape matches
+
+            batch_y_pred_list.append(last_predictions.unsqueeze(1))  # Store prediction
+
+
+
+        if regression_mode == "time_last":
+            # Concatenate all predictions along time dimension
+            batch_y_pred = torch.cat(batch_y_pred_list, dim=1).unsqueeze(-1)  # Ensure shape matches batch_y
+            # batch_y_pred: concatenated per-step predictions ŷ_{1:H} with shape (B,H,1)
+            # Criterion compares full sequences (teacher-free schedule because we feed our own ŷ).
+        elif regression_mode == "time_full":
+            batch_y_pred = prediction_full
+        
+    else: 
+        # One-step prediction mode: directly predict from full input sequence
+        batch_y_pred = model(batch_u_copy[:,:,:-1])
+    
+    return batch_y_pred
+
 

@@ -1,0 +1,9 @@
+run,best_val_loss,train_time_seconds,_time_hours,smoothness,regression_mode,activation_function,_loss_scaled,_time_scaled,_tradeoff_score
+smoothnessFalse_regression_modetime_full_activation_functiongelu,0.0006478430659626,38215.0,10.615277777777777,False,time_full,gelu,0.0,0.37422360248447206,0.09355590062111802
+smoothnessFalse_regression_modetime_last_activation_functionsilu,0.000675088725984,38439.0,10.6775,False,time_last,silu,0.21372746256162028,0.7220496894409938,0.34080801928146365
+smoothnessFalse_regression_modetime_full_activation_functionsilu,0.0006893143290653,38340.0,10.65,False,time_full,silu,0.3253196224721135,0.5683229813664596,0.3860704621957
+smoothnessTrue_regression_modetime_full_activation_functiongelu,0.0007406037693726,37974.0,10.548333333333334,True,time_full,gelu,0.7276575333347933,0.0,0.545743150001095
+smoothnessFalse_regression_modetime_last_activation_functiongelu,0.0007031705245026,38618.0,10.727222222222222,False,time_last,gelu,0.43401397927044316,1.0,0.5755104844528324
+smoothnessTrue_regression_modetime_full_activation_functionsilu,0.0007753215832053,38238.0,10.621666666666666,True,time_full,silu,1.0,0.40993788819875776,0.8524844720496895
+smoothnessTrue_regression_modetime_last_activation_functiongelu,0.0007636730442754,38440.0,10.677777777777777,True,time_last,gelu,0.9086235141273024,0.7236024844720497,0.8623682567134892
+smoothnessTrue_regression_modetime_last_activation_functionsilu,0.000767874327721,38399.0,10.66638888888889,True,time_last,silu,0.9415803098013641,0.6599378881987578,0.8711697044007125

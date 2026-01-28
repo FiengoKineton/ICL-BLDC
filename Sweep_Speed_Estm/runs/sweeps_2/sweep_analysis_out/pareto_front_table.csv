@@ -1,0 +1,3 @@
+run,best_val_loss,train_time_seconds,_time_hours,smoothness,regression_mode,activation_function
+smoothnessFalse_regression_modetime_full_activation_functiongelu,0.0006478430659626,38215.0,10.615277777777777,False,time_full,gelu
+smoothnessTrue_regression_modetime_full_activation_functiongelu,0.0007406037693726,37974.0,10.548333333333334,True,time_full,gelu

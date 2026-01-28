@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-import re, itertools
+import re, itertools, sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -15,6 +15,10 @@ import matplotlib.pyplot as plt
 # Helpers
 # ----------------------------
 
+_TOKEN_RE = re.compile(r"(?P<num>\d+(?:\.\d+)?)\s*(?P<unit>[dhms])", re.IGNORECASE)
+
+_HMS_RE = re.compile(r"^\s*(\d+):(\d{1,2})(?::(\d{1,2}))?\s*$")
+
 _TIME_RE = re.compile(
     r"(?:(\d+)\s*d)?\s*"
     r"(?:(\d+)\s*h)?\s*"
@@ -23,6 +27,25 @@ _TIME_RE = re.compile(
     re.IGNORECASE
 )
 
+DEFAULT_EXCLUDE = {
+    "run",
+    "best_val_loss",
+    "val_loss",
+    "train_time",
+    "train_time_seconds",
+    "_time_seconds",
+    "_time_hours",
+    "seed",
+}
+
+TOKEN_PATTERNS = [
+    # key=val or key:val or key-val
+    re.compile(r"(?P<k>[A-Za-z][A-Za-z0-9]*)\s*[:=\-]\s*(?P<v>[A-Za-z0-9\.]+)"),
+    # key123 (your current style)
+    re.compile(r"(?P<k>[A-Za-z][A-Za-z0-9]*)(?P<v>\d+(\.\d+)?)"),
+]
+
+# ======================================================== #
 
 def scatter3d_inputs_with_output_colorbar(
     df: pd.DataFrame,
@@ -91,7 +114,6 @@ def scatter3d_inputs_with_output_colorbar(
     fig.savefig(outpath, dpi=dpi)
     plt.close(fig)
     return outpath
-
 
 def one_param_change_effects(
     df: pd.DataFrame,
@@ -180,7 +202,6 @@ def one_param_change_effects(
 
     return results
 
-
 def summarize_one_param_effects(results: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """
     Condenses each one-param analysis into a small summary table:
@@ -208,41 +229,61 @@ def summarize_one_param_effects(results: dict[str, pd.DataFrame]) -> pd.DataFram
         })
     return pd.DataFrame(rows).sort_values("n_comparisons", ascending=False)
 
+def parse_training_time_to_seconds(x) -> float:
+    if x is None:
+        return float("nan")
+    if isinstance(x, float) and np.isnan(x):
+        return float("nan")
 
-def parse_training_time_to_seconds(x: Any) -> float:
-    """
-    Accepts:
-      - seconds as numeric
-      - strings like "0d 17h 13m 17s" (any subset)
-      - strings like "17h 13m 17s"
-    Returns seconds (float). NaN if not parseable.
-    """
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return np.nan
+    # numeric seconds
     if isinstance(x, (int, float, np.integer, np.floating)):
         return float(x)
 
     s = str(x).strip()
-    if s.isdigit():
+    if not s:
+        return float("nan")
+
+    # plain float in string
+    try:
         return float(s)
+    except Exception:
+        pass
 
-    m = _TIME_RE.match(s)
-    if not m:
-        return np.nan
+    # hh:mm:ss or mm:ss
+    m = _HMS_RE.match(s)
+    if m:
+        a = int(m.group(1))
+        b = int(m.group(2))
+        c = m.group(3)
+        if c is None:
+            # treat as mm:ss
+            return float(a * 60 + b)
+        # treat as hh:mm:ss
+        return float(a * 3600 + b * 60 + int(c))
 
-    d = int(m.group(1)) if m.group(1) else 0
-    h = int(m.group(2)) if m.group(2) else 0
-    mm = int(m.group(3)) if m.group(3) else 0
-    sec = int(m.group(4)) if m.group(4) else 0
-    return float(d * 86400 + h * 3600 + mm * 60 + sec)
+    # token-based: scan all (number, unit) pairs
+    total = 0.0
+    found = False
+    for mm in _TOKEN_RE.finditer(s.replace(",", " ")):
+        found = True
+        num = float(mm.group("num"))
+        unit = mm.group("unit").lower()
+        if unit == "d":
+            total += num * 86400.0
+        elif unit == "h":
+            total += num * 3600.0
+        elif unit == "m":
+            total += num * 60.0
+        elif unit == "s":
+            total += num
 
+    return total if found else float("nan")
 
 def ensure_numeric(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     for c in cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
-
 
 def infer_hparams_from_run_name(run: str) -> Dict[str, Optional[float]]:
     """
@@ -264,7 +305,6 @@ def infer_hparams_from_run_name(run: str) -> Dict[str, Optional[float]]:
         "batch_size": grab("batch_size"),
     }
 
-
 def seconds_to_hms(seconds: float) -> str:
     if seconds is None or np.isnan(seconds):
         return "NaN"
@@ -273,7 +313,6 @@ def seconds_to_hms(seconds: float) -> str:
     h, rem = divmod(rem, 3600)
     m, s = divmod(rem, 60)
     return f"{d}d {h:02d}h {m:02d}m {s:02d}s"
-
 
 def plot_one_param_slices(
     df: pd.DataFrame,
@@ -394,7 +433,6 @@ def plot_one_param_slices(
 
     return p1, p2
 
-
 def pick_best_tradeoff_run(
     df: pd.DataFrame,
     run_col: str = "run",
@@ -494,7 +532,6 @@ def pick_best_tradeoff_run(
 
     return scored, best
 
-
 def scatter3d_hparam_grid_colored(
     df: pd.DataFrame,
     triples: list[tuple[str, str, str]],
@@ -525,7 +562,6 @@ def scatter3d_hparam_grid_colored(
         )
         saved_paths.append(p)
     return saved_paths
-
 
 def pareto_front_loss_time(
     df: pd.DataFrame,
@@ -587,7 +623,6 @@ def pareto_front_loss_time(
 
     return pareto
 
-
 def scatter2d_on_ax(
     df: pd.DataFrame,
     x_col: str,
@@ -612,7 +647,6 @@ def scatter2d_on_ax(
     ax.set_ylabel(ylabel or y_col)
     ax.set_title(title or f"{x_col} vs {y_col}")
     ax.grid(True)
-
 
 def save_scatter2d_grid_pdf(
     df: pd.DataFrame,
@@ -644,7 +678,6 @@ def save_scatter2d_grid_pdf(
     fig.savefig(outpath, dpi=dpi)
     plt.close(fig)
     return outpath
-
 
 def scatter3d_on_ax(
     df: pd.DataFrame,
@@ -681,7 +714,6 @@ def scatter3d_on_ax(
     ax.set_title(title or f"({x_col},{y_col},{z_col}) by {c_col}")
     ax.view_init(elev=elev, azim=azim)
     return sc
-
 
 def save_scatter3d_grid_pdf(
     df: pd.DataFrame,
@@ -731,7 +763,6 @@ def save_scatter3d_grid_pdf(
     fig.savefig(outpath, dpi=dpi)
     plt.close(fig)
     return outpath
-
 
 def plot_one_param_slices_on_axes(
     df: pd.DataFrame,
@@ -783,7 +814,6 @@ def plot_one_param_slices_on_axes(
     time_ax.set_title(f"{param}: time (others fixed)")
     time_ax.grid(True)
 
-
 def save_slices_all_params_pdf(
     df: pd.DataFrame,
     params: list[str],
@@ -799,14 +829,14 @@ def save_slices_all_params_pdf(
     outdir.mkdir(parents=True, exist_ok=True)
 
     ncols = len(params)
-    fig, axes = plt.subplots(2, ncols, figsize=(4.8 * ncols, 7.2), squeeze=False)
+    fig, axes = plt.subplots(ncols, 2, figsize=(2 * ncols, 5*ncols), squeeze=False)
 
     for j, p in enumerate(params):
         plot_one_param_slices_on_axes(
             df=df,
             param=p,
-            loss_ax=axes[0, j],
-            time_ax=axes[1, j],
+            loss_ax=axes[j, 0],
+            time_ax=axes[j, 1],
             loss_col=loss_col,
             time_col_s=time_col_s,
             hyperparams=hyperparams,
@@ -818,7 +848,6 @@ def save_slices_all_params_pdf(
     fig.savefig(outpath, dpi=dpi)
     plt.close(fig)
     return outpath
-
 
 def save_bars_loss_time_one_pdf(
     core_sorted_loss: pd.DataFrame,
@@ -851,10 +880,87 @@ def save_bars_loss_time_one_pdf(
     return p
 
 
+# ======================================================== #
 
-# ----------------------------
-# Main analysis
-# ----------------------------
+def detect_hparam_columns(
+    df: pd.DataFrame,
+    exclude: Iterable[str] = DEFAULT_EXCLUDE,
+    require_variation: bool = True,
+) -> List[str]:
+    exclude_set = set(exclude)
+    candidates = [c for c in df.columns if c not in exclude_set]
+
+    # Drop columns that are entirely NaN or constant (optional)
+    out: List[str] = []
+    for c in candidates:
+        s = df[c]
+        if s.isna().all():
+            continue
+        if require_variation and s.nunique(dropna=True) <= 1:
+            continue
+        out.append(c)
+    return out
+
+def coerce_mixed_types(df: pd.DataFrame, cols: Iterable[str]) -> Tuple[pd.DataFrame, List[str], List[str]]:
+    df = df.copy()
+    numeric_cols: List[str] = []
+    categorical_cols: List[str] = []
+
+    for c in cols:
+        # try numeric coercion
+        s_num = pd.to_numeric(df[c], errors="coerce")
+        # if at least half the non-null values become numeric, treat as numeric
+        non_null = df[c].notna().sum()
+        ok = s_num.notna().sum()
+        if non_null > 0 and ok / non_null >= 0.5:
+            df[c] = s_num
+            numeric_cols.append(c)
+        else:
+            df[c] = df[c].astype("string")
+            categorical_cols.append(c)
+
+    return df, numeric_cols, categorical_cols
+
+def parse_hparams_from_run_name(run: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    # split on common separators, but keep the string too
+    parts = re.split(r"[\/,_\s]+", run)
+    for part in parts:
+        for pat in TOKEN_PATTERNS:
+            m = pat.fullmatch(part)
+            if not m:
+                continue
+            k = m.group("k")
+            v = m.group("v")
+            out[k] = v
+    return out
+
+def add_missing_hparams_from_run(
+    df: pd.DataFrame,
+    run_col: str,
+    only_if_missing: bool = True,
+) -> pd.DataFrame:
+    df = df.copy()
+    parsed = df[run_col].astype(str).apply(parse_hparams_from_run_name)
+
+    # union of keys found
+    keys = sorted({k for d in parsed for k in d.keys()})
+    for k in keys:
+        if only_if_missing and k in df.columns:
+            continue
+        df[k] = parsed.apply(lambda d: d.get(k))
+    return df
+
+def top_varying_numeric(df: pd.DataFrame, cols: List[str], k: int = 4) -> List[str]:
+    # more unique values = more informative for scatter
+    scored = [(c, df[c].nunique(dropna=True)) for c in cols]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [c for c, _ in scored[:k]]
+
+
+# -----------------------------
+# Result container
+# -----------------------------
 
 @dataclass
 class AnalysisResult:
@@ -864,64 +970,89 @@ class AnalysisResult:
     correlations: pd.DataFrame
     cleaned_table: pd.DataFrame
     saved_plots: List[Path]
+    hyperparams_all: List[str]
+    hyperparams_numeric: List[str]
+    hyperparams_categorical: List[str]
+
+
+# ---------------------------------------------
+# Safe call wrapper for optional integrations
+# ---------------------------------------------
+
+def _maybe_call(func_name: str, *args, **kwargs):
+    """
+    Call a function if it exists in globals(), otherwise return None.
+    This lets analyze_runs_csv be self-contained while still integrating with your other utilities.
+    """
+    fn = globals().get(func_name, None)
+    if callable(fn):
+        return fn(*args, **kwargs)
+    return None
+
+
+# ----------------------------
+# Main analysis
+# ----------------------------
 
 
 def analyze_runs_csv(
-    csv_path: str | Path,
-    base: str | Path = "runs/sweeps",
-    outdir: str | Path = "run_analysis_out",
+    csv_path: Union[str, Path],
+    base: Union[str, Path] = "runs/sweeps",
+    outdir: Union[str, Path] = "run_analysis_out",
     run_col: str = "run",
     val_loss_col: str = "best_val_loss",
     time_col: str = "train_time",
-    time_sec_col: str = "train_time_seconds",
     time_is_seconds: bool = False,
+    # generalization knobs
+    hyperparams: Optional[List[str]] = None,
+    exclude_cols: Optional[List[str]] = None,
+    infer_hparams_from_run: bool = True,
+    require_hparam_variation: bool = True,
 ) -> AnalysisResult:
     """
-    Reads a CSV of runs and produces:
-      - bar plot of best val loss per run
-      - bar plot of train time per run (hours)
-      - scatter plot: time vs loss
-      - scatter plots: each hyperparam vs loss/time
-      - correlation matrix among numeric hyperparams + loss + time
+    General sweep analysis:
+      - Parses/normalizes loss + time
+      - Detects hyperparams (numeric + categorical) dynamically
+      - Produces a small set of plots + tables
+      - Correlations among numeric hyperparams + loss + time
 
-    Required columns:
-      - run_col (default: 'run')
-      - val_loss_col (default: 'best_val_loss')
-      - time_col (default: 'train_time') : either seconds or strings like '0d 17h 13m 17s'
+    Behavior:
+      - If `hyperparams` is provided: use those columns (and parse missing ones from run if enabled).
+      - Else: auto-detect hyperparams as "all columns except core metric/id columns".
+      - If `infer_hparams_from_run=True`, it will try to add missing hyperparam columns by parsing run names.
 
-    If your CSV has hyperparams as columns already, it will use them too.
-    If not, it will try to infer n_layer/n_head/n_embd/batch_size from the run name.
+    Notes:
+      - This function will *optionally* call your existing utilities if present:
+        pick_best_tradeoff_run, pareto_front_loss_time, scatter3d_hparam_grid_colored,
+        save_scatter2d_grid_pdf, save_slices_all_params_pdf, one_param_change_effects,
+        summarize_one_param_effects, scatter3d_inputs_with_output_colorbar.
+      - If they aren’t defined, it will just skip those extras.
     """
-    base = Path(base)  
-    csv_path = base / csv_path
-    #outdir = csv_path / outdir
-    outdir = base / outdir
+    base = Path(base)
+    csv_path = Path(csv_path)
+    if not csv_path.is_absolute():
+        csv_path = base / csv_path
+
+    outdir = Path(outdir)
+    if not outdir.is_absolute():
+        outdir = base / outdir
     outdir.mkdir(parents=True, exist_ok=True)
+
     df = pd.read_csv(csv_path)
 
-    if run_col not in df.columns:
-        raise ValueError(f"Missing required column '{run_col}'. Columns: {list(df.columns)}")
-    if val_loss_col not in df.columns:
-        raise ValueError(f"Missing required column '{val_loss_col}'. Columns: {list(df.columns)}")
-    if time_col not in df.columns:
-        raise ValueError(f"Missing required column '{time_col}'. Columns: {list(df.columns)}")
+    # Required columns checks
+    for col in [run_col, val_loss_col, time_col]:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column '{col}'. Columns: {list(df.columns)}")
 
-    # Normalize core columns
     df = df.copy()
     df[val_loss_col] = pd.to_numeric(df[val_loss_col], errors="coerce")
 
+    # Normalize time
     if time_is_seconds:
         df["_time_seconds"] = pd.to_numeric(df[time_col], errors="coerce")
     else:
         df["_time_seconds"] = df[time_col].apply(parse_training_time_to_seconds)
-
-    # Add inferred hyperparams if missing
-    """for hp in ["n_layer", "n_head", "n_embd", "batch_size", 
-               "smoothness", "regression_mode", "activation_function", ]:
-        if hp not in df.columns:
-            df[hp] = df[run_col].apply(lambda r: infer_hparams_from_run_name(str(r)).get(hp))"""
-
-    df = ensure_numeric(df, ["_time_seconds", val_loss_col])    #"n_layer", "n_head", "n_embd", "batch_size", 
 
     # Drop rows without essential metrics
     core = df.dropna(subset=[val_loss_col, "_time_seconds"]).copy()
@@ -929,6 +1060,35 @@ def analyze_runs_csv(
         raise ValueError("After parsing, no rows have both val loss and training time available.")
 
     core["_time_hours"] = core["_time_seconds"] / 3600.0
+
+    # Optionally infer hparams from run name
+    if infer_hparams_from_run:
+        core = add_missing_hparams_from_run(core, run_col=run_col, only_if_missing=True)
+
+    # Determine hyperparam columns
+    exclude = {run_col, val_loss_col, time_col, "_time_seconds", "_time_hours"}
+    exclude |= DEFAULT_EXCLUDE
+    if exclude_cols:
+        exclude |= set(exclude_cols)
+
+    if hyperparams is not None:
+        # ensure they exist (or will exist after parsing)
+        missing = [c for c in hyperparams if c not in core.columns]
+        if missing:
+            raise ValueError(
+                f"hyperparams={hyperparams} includes missing columns: {missing}. "
+                f"Available columns: {list(core.columns)}"
+            )
+        hparam_cols = list(hyperparams)
+    else:
+        hparam_cols = detect_hparam_columns(
+            core,
+            exclude=exclude,
+            require_variation=require_hparam_variation,
+        )
+
+    # Coerce mixed types
+    core, hparams_numeric, hparams_categorical = coerce_mixed_types(core, hparam_cols)
 
     # Best run by val loss
     best_idx = core[val_loss_col].idxmin()
@@ -967,7 +1127,7 @@ def analyze_runs_csv(
     plt.close(fig)
     saved.append(p)
 
-    """# Plot 3: Scatter time vs loss
+    # Plot 3: Scatter time vs loss
     fig = plt.figure(figsize=(6, 5))
     plt.scatter(core["_time_hours"].values, core[val_loss_col].values)
     plt.xlabel("Training time [hours]")
@@ -979,8 +1139,8 @@ def analyze_runs_csv(
     plt.close(fig)
     saved.append(p)
 
-    # Hyperparam vs loss/time scatters (only if enough non-NaN)
-    for hp in ["n_layer", "n_head", "n_embd", "batch_size"]:
+    # Hyperparam vs loss/time scatters for numeric hyperparams
+    for hp in hparams_numeric:
         if hp in core.columns and core[hp].notna().sum() >= 2:
             # hp vs loss
             fig = plt.figure(figsize=(6, 5))
@@ -1004,11 +1164,15 @@ def analyze_runs_csv(
             p = outdir / f"scatter_{hp}_vs_time.pdf"
             fig.savefig(p, dpi=200)
             plt.close(fig)
-            saved.append(p)"""
+            saved.append(p)
 
-    # Correlations (Pearson) on numeric columns
-    numeric_cols = [c for c in ["n_layer", "n_head", "n_embd", "batch_size"] if c in core.columns]
-    corr_df = core[numeric_cols + [val_loss_col, "_time_seconds"]].corr(numeric_only=True)
+    # Correlations (Pearson) on numeric columns (only if any numeric hparams exist)
+    corr_cols = hparams_numeric + [val_loss_col, "_time_seconds"]
+    corr_cols = [c for c in corr_cols if c in core.columns]
+    if len(corr_cols) >= 2:
+        corr_df = core[corr_cols].corr(numeric_only=True)
+    else:
+        corr_df = pd.DataFrame()
 
     # Save correlations as CSV
     corr_path = outdir / "correlations.csv"
@@ -1016,180 +1180,173 @@ def analyze_runs_csv(
     saved.append(corr_path)
 
     # Save cleaned table for inspection
-    cleaned = core[[run_col, val_loss_col, "_time_seconds", "_time_hours"] + numeric_cols].copy()
-    cleaned = cleaned.sort_values(val_loss_col, ascending=True)
+    cleaned_cols = [run_col, val_loss_col, "_time_seconds", "_time_hours"] + hparam_cols
+    cleaned_cols = [c for c in cleaned_cols if c in core.columns]
+    cleaned = core[cleaned_cols].copy().sort_values(val_loss_col, ascending=True)
     cleaned_path = outdir / "cleaned_runs_table.csv"
     cleaned.to_csv(cleaned_path, index=False)
     saved.append(cleaned_path)
 
-
     # =========================
-    # Compact reporting (few PDFs)
+    # Compact reporting (few PDFs) - optional integration
     # =========================
 
-    # (A) One PDF: tradeoff summary (2 subplots)
-    scored, best_tradeoff = pick_best_tradeoff_run(
-        df=cleaned,
+    # (A) tradeoff summary (if your helper exists)
+    tradeoff_res = _maybe_call(
+        "pick_best_tradeoff_run",
+        df=cleaned.rename(columns={"_time_seconds": "train_time_seconds"}),
         run_col=run_col,
         loss_col=val_loss_col,
-        time_col_s="_time_seconds",
+        time_col_s="train_time_seconds",
         w_loss=0.75,
         w_time=0.25,
         scaling="minmax",
         outdir=outdir,
         filename_prefix="tradeoff_w075_w025",
-        save=True,   # saves ONE PDF: tradeoff_w075_w025_summary.pdf
+        save=True,
     )
-    saved.append(Path(outdir) / "tradeoff_w075_w025_summary.pdf")
-    saved.append(Path(outdir) / "tradeoff_w075_w025_scored_table.csv")
+    if tradeoff_res is not None:
+        # your helper usually saves these; add if present
+        maybe_pdf = outdir / "tradeoff_w075_w025_summary.pdf"
+        maybe_csv = outdir / "tradeoff_w075_w025_scored_table.csv"
+        if maybe_pdf.exists():
+            saved.append(maybe_pdf)
+        if maybe_csv.exists():
+            saved.append(maybe_csv)
 
-    # (B) One PDF: Pareto
-    pareto = pareto_front_loss_time(
-        df=cleaned,
+    # (B) Pareto (if helper exists)
+    pareto_res = _maybe_call(
+        "pareto_front_loss_time",
+        df=cleaned.rename(columns={"_time_seconds": "train_time_seconds"}),
         loss_col=val_loss_col,
-        time_col_s="_time_seconds",
+        time_col_s="train_time_seconds",
         run_col=run_col,
         outdir=outdir,
         filename="pareto_front_loss_time.pdf",
-        save=True
+        save=True,
     )
-    saved.append(Path(outdir) / "pareto_front_loss_time.pdf")
-    saved.append(Path(outdir) / "pareto_front_table.csv")
+    if pareto_res is not None:
+        maybe_pdf = outdir / "pareto_front_loss_time.pdf"
+        maybe_csv = outdir / "pareto_front_table.csv"
+        if maybe_pdf.exists():
+            saved.append(maybe_pdf)
+        if maybe_csv.exists():
+            saved.append(maybe_csv)
 
+    # --- 3D scatters colored by metrics (if helper exists + >= 3 numeric hparams) ---
+    if len(hparams_numeric) >= 3 and callable(globals().get("scatter3d_hparam_grid_colored", None)):
+        top_nums = top_varying_numeric(cleaned, hparams_numeric, k=4)
+        triples: List[Tuple[str, str, str]] = []
+        if len(top_nums) >= 3:
+            triples.append((top_nums[0], top_nums[1], top_nums[2]))
+        if len(top_nums) >= 4:
+            triples.append((top_nums[0], top_nums[1], top_nums[3]))
+            triples.append((top_nums[1], top_nums[2], top_nums[3]))
 
-    # --- 3D scatters colored by metrics (if present) ---
-    paths = scatter3d_hparam_grid_colored(
-        df=cleaned,
-        triples=[
-            ("n_layer", "n_head", "n_embd"),
-            ("n_layer", "n_head", "batch_size"),
-            ("n_head", "n_embd", "batch_size"),
-        ],
-        color_col=val_loss_col,
-        outdir=outdir,
-        filename_prefix="scatter3d_val_loss",
-    )
-    saved.extend(paths)
-
-    paths = scatter3d_hparam_grid_colored(
-        df=cleaned,
-        triples=[
-            ("n_layer", "n_head", "n_embd"),
-            ("n_layer", "n_head", "batch_size"),
-            ("n_head", "n_embd", "batch_size"),
-        ],
-        color_col="_time_seconds",
-        outdir=outdir,
-        filename_prefix="scatter3d_time_seconds",
-    )
-    saved.extend(paths)
-
-    pairs = [("_time_hours", val_loss_col, "Time [h] vs Val loss")]
-    for hp in ["n_layer", "n_head", "n_embd", "batch_size"]:
-        if hp in cleaned.columns and cleaned[hp].notna().sum() >= 2:
-            pairs.append((hp, val_loss_col, f"{hp} vs val loss"))
-            pairs.append((hp, "_time_hours", f"{hp} vs time [h]"))
-
-    p_grid = save_scatter2d_grid_pdf(
-        df=cleaned,
-        pairs=pairs,
-        outdir=outdir,
-        filename="scatters_2d_grid.pdf",
-        ncols=3,
-    )
-    saved.append(p_grid)
-
-    """triples = [
-        ("n_layer", "n_head", "n_embd", val_loss_col),
-        ("n_layer", "n_head", "batch_size", val_loss_col),
-        ("n_head", "n_embd", "batch_size", val_loss_col),
-        ("n_layer", "n_head", "n_embd", "_time_hours"),
-        ("n_layer", "n_head", "batch_size", "_time_hours"),
-        ("n_head", "n_embd", "batch_size", "_time_hours"),
-    ]
-    p3dgrid = save_scatter3d_grid_pdf(
-        df=cleaned,
-        triples=triples,
-        outdir=outdir,
-        filename="scatters_3d_grid_color_loss.pdf",
-        ncols=2,
-    )
-    saved.append(p3dgrid)"""
-
-    cleaned_for_slices = cleaned.rename(columns={"_time_seconds": "train_time_seconds"})
-
-    p_slices = save_slices_all_params_pdf(
-        df=cleaned_for_slices,
-        params=["n_layer", "n_head", "n_embd", "batch_size"],
-        outdir=outdir,
-        filename="slices_all_params.pdf",
-        loss_col=val_loss_col,
-        time_col_s="train_time_seconds",
-        min_points_per_slice=2,
-    )
-    saved.append(p_slices)
-
-
-    # Example integration inside analyze_runs_csv(...) after 'cleaned' is built:
-    effects = one_param_change_effects(
-        df=cleaned.rename(columns={
-            "_time_seconds": "train_time_seconds",
-            # ensure your loss column name matches below
-        }),
-        outdir=outdir,
-        hyperparams=("n_layer", "n_head", "n_embd", "batch_size"),
-        loss_col=val_loss_col,
-        time_col_seconds="train_time_seconds",
-    )
-
-    summary = summarize_one_param_effects(effects)
-    summary.to_csv(Path(outdir) / "one_param_effects_summary.csv", index=False)
-    print("\n=== One-param change summary ===")
-    print(summary)
-
-    """# Example: layers effect with heads/embd/batch fixed
-    for p in ["n_layer", "n_head", "n_embd", "batch_size"]:
-        plot_one_param_slices(
-            df=cleaned.rename(columns={
-                "_time_seconds": "train_time_seconds",
-                # ensure your loss column name matches below
-            }),
-            param=p,
-            loss_col="best_val_loss",
-            time_col_s="train_time_seconds",
+        paths = _maybe_call(
+            "scatter3d_hparam_grid_colored",
+            df=cleaned,
+            triples=triples,
+            color_col=val_loss_col,
             outdir=outdir,
-            min_points_per_slice=2,  # set to 3 if you literally want “only the 3-point cases”
-        )"""
+            filename_prefix="scatter3d_val_loss",
+        )
+        if paths:
+            saved.extend(list(paths))
 
+        paths = _maybe_call(
+            "scatter3d_hparam_grid_colored",
+            df=cleaned,
+            triples=triples,
+            color_col="_time_seconds",
+            outdir=outdir,
+            filename_prefix="scatter3d_time_seconds",
+        )
+        if paths:
+            saved.extend(list(paths))
 
-    # 3D scatter: pick any 3 inputs + 1 output to color
-    # Example: inputs = (n_layer, n_head, n_embd), output = best_val_loss
-    p3d = scatter3d_inputs_with_output_colorbar(
-        df=cleaned,
-        x_col="n_layer",
-        y_col="n_head",
-        z_col="n_embd",
-        c_col=val_loss_col,   # or "_time_hours" if you want time as the "output"
-        outdir=outdir,
-        filename="scatter3d_layers_heads_embd_color_loss.pdf",
-        title="Hyperparams (3D) colored by validation loss",
-    )
-    saved.append(p3d)
+    # 2D grid scatter summary (if helper exists)
+    if callable(globals().get("save_scatter2d_grid_pdf", None)):
+        pairs: List[Tuple[str, str, str]] = [("_time_hours", val_loss_col, "Time [h] vs Val loss")]
+        for hp in hparams_numeric:
+            if hp in cleaned.columns and cleaned[hp].notna().sum() >= 2:
+                pairs.append((hp, val_loss_col, f"{hp} vs val loss"))
+                pairs.append((hp, "_time_hours", f"{hp} vs time [h]"))
 
-    # Optional second one: color by training time
-    p3d_time = scatter3d_inputs_with_output_colorbar(
-        df=cleaned,
-        x_col="n_layer",
-        y_col="n_head",
-        z_col="n_embd",
-        c_col="_time_hours",
-        outdir=outdir,
-        filename="scatter3d_layers_heads_embd_color_time.pdf",
-        title="Hyperparams (3D) colored by training time [hours]",
-    )
-    saved.append(p3d_time)
+        p_grid = _maybe_call(
+            "save_scatter2d_grid_pdf",
+            df=cleaned,
+            pairs=pairs,
+            outdir=outdir,
+            filename="scatters_2d_grid.pdf",
+            ncols=3,
+        )
+        if isinstance(p_grid, (str, Path)) and Path(p_grid).exists():
+            saved.append(Path(p_grid))
 
+    # Slices (if helper exists)
+    if callable(globals().get("save_slices_all_params_pdf", None)) and len(hparams_numeric) >= 1:
+        cleaned_for_slices = cleaned.rename(columns={"_time_seconds": "train_time_seconds"})
+        p_slices = _maybe_call(
+            "save_slices_all_params_pdf",
+            df=cleaned_for_slices,
+            params=hparams_numeric,
+            outdir=outdir,
+            filename="slices_all_params.pdf",
+            loss_col=val_loss_col,
+            time_col_s="train_time_seconds",
+            min_points_per_slice=2,
+        )
+        if isinstance(p_slices, (str, Path)) and Path(p_slices).exists():
+            saved.append(Path(p_slices))
 
+    # One-param change effects (if helpers exist)
+    if callable(globals().get("one_param_change_effects", None)) and callable(globals().get("summarize_one_param_effects", None)):
+        effects = _maybe_call(
+            "one_param_change_effects",
+            df=cleaned.rename(columns={"_time_seconds": "train_time_seconds"}),
+            outdir=outdir,
+            hyperparams=tuple(hparams_numeric),
+            loss_col=val_loss_col,
+            time_col_seconds="train_time_seconds",
+        )
+        if effects is not None:
+            summary = _maybe_call("summarize_one_param_effects", effects)
+            if isinstance(summary, pd.DataFrame):
+                summary_path = outdir / "one_param_effects_summary.csv"
+                summary.to_csv(summary_path, index=False)
+                saved.append(summary_path)
+
+    # A single 3D scatter with colorbar (if helper exists)
+    if callable(globals().get("scatter3d_inputs_with_output_colorbar", None)) and len(hparams_numeric) >= 3:
+        top_nums = top_varying_numeric(cleaned, hparams_numeric, k=3)
+        p3d = _maybe_call(
+            "scatter3d_inputs_with_output_colorbar",
+            df=cleaned,
+            x_col=top_nums[0],
+            y_col=top_nums[1],
+            z_col=top_nums[2],
+            c_col=val_loss_col,
+            outdir=outdir,
+            filename=f"scatter3d_{top_nums[0]}_{top_nums[1]}_{top_nums[2]}_color_loss.pdf",
+            title="Hyperparams (3D) colored by validation loss",
+        )
+        if isinstance(p3d, (str, Path)) and Path(p3d).exists():
+            saved.append(Path(p3d))
+
+        p3d_time = _maybe_call(
+            "scatter3d_inputs_with_output_colorbar",
+            df=cleaned,
+            x_col=top_nums[0],
+            y_col=top_nums[1],
+            z_col=top_nums[2],
+            c_col="_time_hours",
+            outdir=outdir,
+            filename=f"scatter3d_{top_nums[0]}_{top_nums[1]}_{top_nums[2]}_color_time.pdf",
+            title="Hyperparams (3D) colored by training time [hours]",
+        )
+        if isinstance(p3d_time, (str, Path)) and Path(p3d_time).exists():
+            saved.append(Path(p3d_time))
 
     return AnalysisResult(
         best_run=best_run,
@@ -1198,7 +1355,11 @@ def analyze_runs_csv(
         correlations=corr_df,
         cleaned_table=cleaned,
         saved_plots=saved,
+        hyperparams_all=hparam_cols,
+        hyperparams_numeric=hparams_numeric,
+        hyperparams_categorical=hparams_categorical,
     )
+
 
 
 """

@@ -1,3 +1,4 @@
-,best_val_loss,_time_seconds
-best_val_loss,1.0,0.8506336311620303
-_time_seconds,0.8506336311620303,1.0
+,smoothness,best_val_loss,_time_seconds
+smoothness,1.0,0.9243279130322558,-0.3888751848212106
+best_val_loss,0.9243279130322558,1.0,-0.09380054384897803
+_time_seconds,-0.3888751848212106,-0.09380054384897803,1.0

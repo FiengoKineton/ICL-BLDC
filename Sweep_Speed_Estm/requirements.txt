@@ -9,6 +9,7 @@ PyYAML
 matplotlib
 psutil 
 pynvml
+optuna
 
 
 # module load python

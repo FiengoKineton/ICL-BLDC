@@ -19,9 +19,9 @@ def build_device(cfg_compute: Dict[str, Any], print_flag: bool = True):
 
     if device_type == "cuda":
         torch.cuda.set_device(device)
-        torch.backends.cuda.matmul.fp32_precision = "ieee"
-        torch.backends.cudnn.conv.fp32_precision = "ieee"
-        #torch.set_float32_matmul_precision("high")
+        #torch.backends.cuda.matmul.fp32_precision = "ieee"
+        #torch.backends.cudnn.conv.fp32_precision = "ieee"
+        torch.set_float32_matmul_precision("high")
 
         if print_flag: print(f"[device] CUDA available: {torch.cuda.is_available()}")
         if print_flag: print(f"[device] Current device: {torch.cuda.current_device()}")

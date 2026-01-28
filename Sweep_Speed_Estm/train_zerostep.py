@@ -5,11 +5,11 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Any
 
-import yaml
-import pandas as pd
+import yaml, pandas as pd
 
 from data_utils import load_datasets
 from run_experiment import run_single_experiment
+from run_sweep import Sweeper
 from plot_sweep_analisys import analyze_runs_csv
 
 
@@ -31,74 +31,6 @@ def run_single(cfg: Dict[str, Any]):
     print(f"[main] Single run finished, best_val_loss={best_val:.4e}, test_loss={test_loss:.4e}, train_time={train_time:.2f}s\n")
 
 
-def run_sweep(cfg: Dict[str, Any]):
-    """
-    Cartesian sweep over cfg["sweep"].
-    Same datasets reused for all runs.
-    """
-    base_cfg = deepcopy(cfg)
-    sweep_def = base_cfg.get("sweep", {})
-    if not sweep_def:
-        raise ValueError("Sweep mode requested but no 'sweep' block in config.")
-
-    keys, values = zip(*sweep_def.items())
-
-    train_ds, val_ds, test_ds = load_datasets(base_cfg["data"])
-
-    root = Path(base_cfg["experiment"]["output_root"]) / base_cfg["experiment"]["output_sweep"]
-    root.mkdir(parents=True, exist_ok=True)
-
-    results_rows = []
-
-    for i, combo in enumerate(itertools.product(*values)):
-        overrides = dict(zip(keys, combo))
-
-        # Build name
-        name = "_".join(f"{k}{v}" for k, v in overrides.items())
-        cfg_run = deepcopy(base_cfg)
-        cfg_run["experiment"]["name"] = name
-
-        # Apply overrides to relevant blocks
-        # here we assume all swept keys belong to either `model` or `training`
-        for k, v in overrides.items():
-            if k in cfg_run["model"]:
-                cfg_run["model"][k] = v
-            elif k in cfg_run["training"]:
-                cfg_run["training"][k] = v
-            else:
-                # if you sweep something else, handle accordingly
-                cfg_run["training"][k] = v
-
-        run_dir = root / name
-        print(f"[main] Running sweep combo {i}: {name}\n")
-        best_val_loss, train_time, test_loss = run_single_experiment(cfg_run, train_ds, val_ds, test_ds, run_dir, name)
-
-        row = {"run": name, "best_val_loss": best_val_loss, "train_time_seconds": train_time, "test_loss": test_loss}
-        row.update(overrides)
-        results_rows.append(row)
-
-    if results_rows:
-        df = pd.DataFrame(results_rows)
-        sweep_pth = "sweep_results.csv"
-        out_csv = root / sweep_pth
-        df.to_csv(out_csv, index=False)
-        print(f"[main] Saved sweep summary to {out_csv}")
-
-        try:
-            analyze_runs_csv(
-                    csv_path=sweep_pth,
-                    outdir="sweep_analysis_out",
-                    base=root,
-                    run_col="run",
-                    val_loss_col="best_val_loss",
-                    time_col="train_time_seconds",
-                    time_is_seconds=True,
-                )
-        except Exception as e:
-            print(f"[main] Warning: failed to analyze sweep results: {e}")
-    else:
-        print("[main] No sweep runs executed.")
-
 
 if __name__ == "__main__":
     config_path = "configs.yaml"
@@ -108,6 +40,7 @@ if __name__ == "__main__":
     if mode == "single":
         run_single(cfg)
     elif mode == "sweep":
-        run_sweep(cfg)
+        sweeper = Sweeper(cfg, load_datasets_fn=load_datasets, run_single_experiment_fn=run_single_experiment, analyze_runs_csv_fn=analyze_runs_csv)
+        sweeper.run()
     else:
         raise ValueError(f"Unknown experiment.mode='{mode}' (expected 'single' or 'sweep').")

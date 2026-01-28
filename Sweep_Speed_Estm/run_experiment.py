@@ -162,8 +162,8 @@ def run_single_experiment(
     np.random.seed(seed)
 
     # Scheduled sampling params
-    ss_enabled = bool(ss_cfg.get("enabled", False))
-    ss_mode = ss_cfg.get("mode", "stochastic")
+    ss_enabled = bool(ss_cfg.get("sched_enabled", False))
+    ss_mode = ss_cfg.get("sched_mode", "stochastic")
     p0 = float(ss_cfg.get("p0", 1.0))
     decay_epochs = int(ss_cfg.get("decay_epochs", 0))
     p_min = float(ss_cfg.get("p_min", 0.0))
@@ -284,7 +284,7 @@ def run_single_experiment(
         }
         history.append(row)
 
-        if epoch % 100 == 0:
+        if epoch % eval_interval == 0:
                 with open(tex_filename, "w") as f:
                     f.write(r"\begin{tabular}{|l|l|}" + "\n")
                     f.write(r"\hline" + "\n")
@@ -298,6 +298,8 @@ def run_single_experiment(
                     f.write(f"Best Val Loss & {best_val_loss:.4e} \\\\ \n")
                     f.write(f"Learning Rate & {lr_epoch:.3e} \\\\ \n")
                     f.write(f"Patience Count & {no_improve}/{patience} \\\\ \n")
+                    f.write(f"Device & {device_type} \\\\ \n")
+                    f.write(f"Elapsed Time & {_format_seconds(time.time() - start_time)} \\\\ \n")
                     f.write(r"\hline" + "\n")
                     f.write(r"\end{tabular}")
 

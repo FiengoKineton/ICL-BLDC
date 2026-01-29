@@ -1,6 +1,6 @@
 # engine.py             | TESTING
 
-import torch, sys
+import torch, sys, numpy as np
 from typing import Optional
 from dataset import reverse_normalization
 from engine_utils import _regression, regression, smooth_dynamics_loss
@@ -109,37 +109,86 @@ def validate(           # to check the best model
 
     return running_loss / len(dataloader)
 
-def evaluate(           # to check over/under-fitting
+
+def test(           # to check over/under-fitting
     model,
-    dataloader,
-    criterion,
+    dataset,
     device,
-    R_smooth: float = None,
-    regression_mode: str = "time_last",
-        teacher_prob: float = 0.0,
-        ss_mode: str = "stochastic",
+    seq_len: int = 10,
+    dt: Optional[float] = None,
 ):
     """
     Generic evaluation loop: runs autoregressive regression under no_grad,
     returns mean loss over batches. Use it for BOTH validation and test.
     """
-    model.eval()
-    running_loss = 0.0
+    ds_len = len(dataset)
+    loss = np.zeros(ds_len)
+    u_full_all, y_full_all = [], []
+
+
+    for i in range(ds_len):
+        try:
+            u_full, y_full = dataset.get_full_experiment(i)  # (T, n_u), (T, 1)
+            T = u_full.shape[0]
+            u_full_all.append(u_full.to(device))
+            y_full_all.append(y_full.to(device))
+        except Exception as e:
+            ds_len = i
+            break
+
+    u_full_all = torch.stack(u_full_all, dim=0)  # (N, T, n_u)
+    y_full_all = torch.stack(y_full_all, dim=0)  # (N, T, 1)
+    y_pred_all = torch.zeros_like(y_full_all)
+
+    last_omega = torch.zeros((ds_len, seq_len, 1))
 
     with torch.no_grad():
-        for batch_u, batch_y in dataloader:
-            batch_u = batch_u.to(device)
-            batch_y = batch_y.to(device)
+        for j in range(y_full_all.shape[1]):
+            if j < seq_len:
+                input_val = u_full_all[:, :j+1, :]                  # first j samples of the experiment
+                input_val[:, :j+1, 4] = last_omega[:,-j-1:,0]       # last j samples of the past estimations window
 
-            batch_y_pred = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode)
-            loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth, criterion=criterion)
+                pred = model(input_val)[:,-1,:]                     # we consider only the last value of the model estimation
+            else:
+                input_val = u_full_all[:,j-seq_len+1:j+1, :]
+                input_val[:,:, 4] = last_omega[:,:,0]
 
-            running_loss += loss.item()
+                pred = model(input_val)[:,-1,:]                     # we consider only the last value of the model estimation
+            
+            
+            y_pred_all[:,j,0] = pred[:,0]                           # the list of estimations is updated
+            last_omega = torch.roll(last_omega, -1, 1)              # the window of last estimation is slid of 1 sample
+            last_omega[:,-1,0] = y_pred_all[:,j,0]                  # last estimation is added to the window
+            
+        u_full_all, y_full_all, y_pred_all = reverse_normalization(u_full_all, y_full_all, y_pred_all)
 
-    return running_loss / max(len(dataloader), 1)
+    for i in range(ds_len):
+        y_tmp = y_full_all[i,:,:].cpu().numpy()
+        y_pred_tmp = y_pred_all[i,:,:].cpu().numpy()
+        loss[i] = np.sqrt(((y_tmp-y_pred_tmp)**2).mean())
+
+    #test_loss = loss.mean()
+    test_loss = loss.mean()
+
+    # Shapes
+    N, T, n_u = u_full_all.shape
+
+    base_dt = 1.0 if dt is None else dt
+    t_flat = (torch.arange(N * T, device=device) * base_dt).cpu().numpy()
+
+    # Remove trailing dim=1 from y if present, then flatten
+    y_true_flat = y_full_all.view(N, T, -1).squeeze(-1).reshape(-1).cpu().numpy()  # (N*T,)
+    y_pred_flat = y_pred_all.view(N, T, -1).squeeze(-1).reshape(-1).cpu().numpy()  # (N*T,)
+
+    # Inputs: (N, T, n_u) -> (N*T, n_u)
+    u_flat = u_full_all.reshape(N * T, n_u).cpu().numpy()  # (N*T, n_u)
+
+    traj = (t_flat, u_flat, y_true_flat, y_pred_flat)
+
+    return test_loss, traj, (N, T)
 
 
-def test(               # to check predicted trajectories
+def _test(               # to check predicted trajectories
         model,
         dataloader,
         device: torch.device,

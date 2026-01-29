@@ -1,6 +1,6 @@
 # run_experiment.py     | SET (leave it as it is)
 
-import os, time, torch, json, torch.nn as nn, numpy as np, pandas as pd
+import os, time, torch, json, torch.nn as nn, numpy as np, pandas as pd, matplotlib.pyplot as plt, random
 
 from pathlib import Path
 from functools import partial
@@ -9,7 +9,7 @@ from typing import Dict, Any, List
 from torch.utils.data import DataLoader
 from datetime import timedelta
 
-from engine import train, validate, evaluate
+from engine import train, validate, test
 from engine_utils import build_device, build_model, configure_optimizer, teacher_prob_schedule, warmup_cosine_lr, TimeWeightedMSELoss
 from plot_testing import run_testing
 from plot_training import run_training_plots
@@ -23,6 +23,67 @@ def _format_seconds(seconds: float) -> str:
     except Exception:
         return f"{seconds:.3f}s"
 
+def write_progress_pdf(
+    history,
+    epoch: int,
+    y_true_1d,
+    y_pred_1d,
+    pdf_path,
+    exp_name: str = "",
+    log_loss: bool = True,
+):
+    """
+    Overwrites a single PDF on disk each call.
+    Top: loss curves + vertical dotted line at best val epoch so far.
+    Bottom: test prediction vs true for one example (flattened).
+    """
+    pdf_path = Path(pdf_path)
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+
+    epochs = np.array([r["epoch"] for r in history], dtype=int)
+    train  = np.array([r["train_loss"] for r in history], dtype=float)
+    val    = np.array([r["val_loss"] for r in history], dtype=float)
+    test   = np.array([r["test_loss"] for r in history], dtype=float)
+
+    best_idx = int(np.argmin(val))
+    best_epoch = int(epochs[best_idx])
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=False)
+
+    # --- losses ---
+    ax1.plot(epochs, train, label="train")
+    ax1.plot(epochs, val,   label="val")
+    ax1.plot(epochs, test,  label="test")
+    ax1.axvline(best_epoch, linestyle=":", linewidth=2, label=f"best val @ {best_epoch}")
+
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Loss")
+    ax1.grid(True, which="both", alpha=0.3)
+    ax1.legend(loc="best")
+    if log_loss:
+        ax1.set_yscale("log")
+    ax1.set_title(f"{exp_name} | epoch={epoch} | best_val_epoch={best_epoch}")
+
+    # --- prediction ---
+    if y_true_1d is not None and y_pred_1d is not None:
+        yt = np.asarray(y_true_1d).reshape(-1)
+        yp = np.asarray(y_pred_1d).reshape(-1)
+        n = min(len(yt), len(yp))
+        x = np.arange(n)
+        ax2.plot(x, yt[:n], label="test y (true)")
+        ax2.plot(x, yp[:n], label="test y (pred)")
+        ax2.set_xlabel("Index (flattened)")
+        ax2.set_ylabel("Value")
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(loc="best")
+        ax2.set_title("Test prediction (one representative batch/sequence)")
+    else:
+        ax2.text(0.5, 0.5, "No example available", ha="center", va="center")
+        ax2.axis("off")
+
+    fig.tight_layout()
+    fig.savefig(pdf_path, format="pdf")  # overwrite same file
+    plt.close(fig)
 
 def save_run_summary(
     run_dir: Path,
@@ -158,6 +219,7 @@ def run_single_experiment(
 
     # Seed
     seed = cfg_exp.get("seed", 42)
+    dt = cfg.get("simulation", {}).get("dt", 0.01)
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -188,12 +250,6 @@ def run_single_experiment(
     val_dl = DataLoader(
         val_ds,
         batch_size=cfg_training["eval_batch_size"],
-        pin_memory=True,
-        shuffle=True,
-    )
-    test_dl = DataLoader(
-        test_ds,
-        batch_size=cfg_training["batch_size"],
         pin_memory=True,
         shuffle=True,
     )
@@ -248,8 +304,9 @@ def run_single_experiment(
     mon.start()
     start_time = time.time()
 
-    eval_interval = cfg_training.get("eval_interval", 1)
+    eval_interval = cfg_training.get("eval_interval", 50)
     tex_filename = "run_ongoing.tex"
+    pdf_file = "run_ongoing_progress.pdf"
 
     for epoch in range(cfg_training["max_iters"]):
         # LR
@@ -270,8 +327,9 @@ def run_single_experiment(
             teacher_prob = 0.0
 
         train_loss = train(model, train_dl, criterion, optimizer, device, R_smooth, regression_mode, teacher_prob, ss_mode)
-        val_loss = validate(model, val_dl, criterion, device, R_smooth, regression_mode, teacher_prob, ss_mode) if (epoch % eval_interval) == 0 else np.nan
-        test_loss = evaluate(model, test_dl, criterion, device, R_smooth, regression_mode, teacher_prob, ss_mode) if (epoch % eval_interval) == 0 else np.nan
+        val_loss = validate(model, val_dl, criterion, device, R_smooth, regression_mode, teacher_prob, ss_mode)
+        test_loss, (_, _, y_ex, y_pred_ex), (N, T) = test(model, test_ds, device, cfg_data["seq_len"], dt) if (epoch % eval_interval) == 0 else np.nan
+        i = random.randint(0, N - 1)
 
         # Track
         row = {
@@ -285,23 +343,33 @@ def run_single_experiment(
         history.append(row)
 
         if epoch % eval_interval == 0:
-                with open(tex_filename, "w") as f:
-                    f.write(r"\begin{tabular}{|l|l|}" + "\n")
-                    f.write(r"\hline" + "\n")
-                    f.write(r"\textbf{Metric} & \textbf{Value} \\\\" + "\n")
-                    f.write(f"Exp Name & {exp_name} \\\\ \n")
-                    f.write(f"Directory & {run_dir} \\\\ \n")
-                    f.write(f"Epoch & {epoch} \\\\ \n")
-                    f.write(f"Train Loss & {train_loss:.4e} \\\\ \n")
-                    f.write(f"Val Loss & {val_loss:.4e} \\\\ \n")
-                    f.write(f"Test Loss & {test_loss:.4e} \\\\ \n")
-                    f.write(f"Best Val Loss & {best_val_loss:.4e} \\\\ \n")
-                    f.write(f"Learning Rate & {lr_epoch:.3e} \\\\ \n")
-                    f.write(f"Patience Count & {no_improve}/{patience} \\\\ \n")
-                    f.write(f"Device & {device_type} \\\\ \n")
-                    f.write(f"Elapsed Time & {_format_seconds(time.time() - start_time)} \\\\ \n")
-                    f.write(r"\hline" + "\n")
-                    f.write(r"\end{tabular}")
+            with open(tex_filename, "w") as f:
+                f.write(r"\begin{tabular}{|l|l|}" + "\n")
+                f.write(r"\hline" + "\n")
+                f.write(r"\textbf{Metric} & \textbf{Value} \\\\" + "\n")
+                f.write(f"Exp Name & {exp_name} \\\\ \n")
+                f.write(f"Directory & {run_dir} \\\\ \n")
+                f.write(f"Epoch & {epoch} \\\\ \n")
+                f.write(f"Train Loss & {train_loss:.4e} \\\\ \n")
+                f.write(f"Val Loss & {val_loss:.4e} \\\\ \n")
+                f.write(f"Test Loss & {test_loss:.4e} \\\\ \n")
+                f.write(f"Best Val Loss & {best_val_loss:.4e} \\\\ \n")
+                f.write(f"Learning Rate & {lr_epoch:.3e} \\\\ \n")
+                f.write(f"Patience Count & {no_improve}/{patience} \\\\ \n")
+                f.write(f"Device & {device_type} \\\\ \n")
+                f.write(f"Elapsed Time & {_format_seconds(time.time() - start_time)} \\\\ \n")
+                f.write(r"\hline" + "\n")
+                f.write(r"\end{tabular}")
+
+            write_progress_pdf(
+                history=history,
+                epoch=epoch,
+                y_true_1d=y_ex[i*T:(i+1)*T],
+                y_pred_1d=y_pred_ex[i*T:(i+1)*T],
+                pdf_path= pdf_file,
+                exp_name=exp_name,
+                log_loss=True,
+            )
 
         # Early stopping logic on actual val_loss
         if not np.isnan(val_loss):
@@ -341,6 +409,8 @@ def run_single_experiment(
 
     if os.path.exists(tex_filename):
         os.remove(tex_filename)
+    if os.path.exists(pdf_file):
+        os.remove(pdf_file)
 
     # Final checkpoint (loss trajectory etc)
     train_time = time.time() - start_time

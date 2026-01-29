@@ -457,17 +457,12 @@ def run_testing(
 
     # 6) Loop over experiments
     loss = []
-    regression_mode = cfg.get("training", {}).get("regression_mode", "time_last")
-    dl = DataLoader(
-        ds, 
-        batch_size=cfg["training"]["batch_size"],
-        pin_memory=True,
-        shuffle=True,
-    )
+    seq_len = cfg["data"].get("seq_len", 10)
+    dt = cfg.get("simulation", {}).get("dt", 0.01)
 
     for idx in range(n_exps):
         #t, y_true, y_hat, u_den = run_model_on_experiment(model, ds, idx, device)
-        t, y_true, y_hat, u_den = test(model, dl, device, regression_mode=regression_mode)
+        _, (t, u_den, y_true, y_hat), _ = test(model, ds, device, seq_len, dt)
 
         mse = float(np.mean((y_true - y_hat) ** 2))
         rmse = float(np.sqrt(mse))

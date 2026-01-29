@@ -2,7 +2,7 @@
 
 experiment:
   name: "temp"
-  mode: "sweep"                                     # "single" or "sweep"
+  mode: "single"                                   # "single" or "sweep"
   output_root: "runs"                               # out directory for single run
   output_sweep: "sweeps_3"                          # out directory for sweeps
   seed: 123                                         # before: 42
@@ -44,7 +44,7 @@ training:
   lr: 1.0e-5
   warmup_iters: 5000
   weight_decay: 0.0
-  eval_interval: 1
+  eval_interval: 50
   eval_iters: 1
   patience: 1000
   fixed_lr: false        

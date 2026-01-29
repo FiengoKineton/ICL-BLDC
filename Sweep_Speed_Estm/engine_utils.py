@@ -160,6 +160,30 @@ def teacher_prob_schedule(epoch: int, p0: float, decay_epochs: int, p_min: float
     p = p0 * (1.0 - frac)
     return float(max(p_min, p))
 
+def scheduled_sampling_inject(y_prev, yhat_prev, p: float, ss_mode: str):
+    """
+    ss_mode:
+      - "stochastic" -> Bernoulli selection (aka aleatoric): choose y_prev w.p. p else yhat_prev
+      - "soft"       -> deterministic merge: p*y_prev + (1-p)*yhat_prev
+    """
+    if p <= 0.0:
+        return yhat_prev
+    if p >= 1.0:
+        return y_prev
+
+    # force (B,) for both
+    y_prev = y_prev.view(-1)
+    yhat_prev = yhat_prev.view(-1)
+
+    if ss_mode == "stochastic":
+        use_gt = (torch.rand(y_prev.shape, device=y_prev.device) < p)  # (B,) bool mask
+        return torch.where(use_gt, y_prev, yhat_prev)
+
+    if ss_mode == "soft":
+        return p * y_prev + (1.0 - p) * yhat_prev
+
+    raise ValueError(f"Unknown ss_mode: {ss_mode}")
+
 def regression(
         batch_u,
         model,
@@ -189,17 +213,17 @@ def regression(
             batch_u_step = batch_u_copy.clone()
 
             if t > 0 and teacher_prob > 0.0 and batch_y is not None:
-                y_prev = batch_y[:, t-1, 0]
+                y_prev = batch_y[:, t-1, 0].view(-1)          # (B,)
+                yhat_prev = last_predictions.view(-1)         # (B,)
 
-                if ss_mode == "stochastic":
-                    m = (torch.rand_like(last_predictions) < teacher_prob).float()
-                    inject = m * y_prev + (1.0 - m) * last_predictions
-                elif ss_mode == "soft":
-                    inject = teacher_prob * y_prev + (1.0 - teacher_prob) * last_predictions
-                else:
-                    raise ValueError(f"Unknown ss_mode: {ss_mode}")
+                inject = scheduled_sampling_inject(
+                    y_prev=y_prev,
+                    yhat_prev=yhat_prev,
+                    p=teacher_prob,
+                    ss_mode=ss_mode,                          # "stochastic" or "soft"
+                )
             else:
-                inject = last_predictions
+                inject = last_predictions.view(-1)
 
             batch_u_step[:, t, 4] = inject
             batch_u_tmp = batch_u_step[:, :t+1, :]

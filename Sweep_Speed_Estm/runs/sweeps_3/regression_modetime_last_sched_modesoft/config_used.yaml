@@ -1,0 +1,85 @@
+compute:
+  compile: false
+  cuda_device: cuda:0
+  no_cuda: false
+  threads: 16
+data:
+  data_subdir: data
+  folders:
+  - simulated/50_percent_low_speed
+  nu: 5
+  nx: 4
+  ny: 1
+  project_root_marker: Sweep_Speed_Estm
+  seq_len: 10
+  split_seed: 42
+  test__folders:
+  - true/CL_experiments_double_sensor/inertia07_ki-0.0061-kp-11.8427
+  test_ratio: 0.1
+  train__folders:
+  - simulated/50_percent_low_speed
+  train_ratio: 0.7
+  val__folders:
+  - simulated/50_percent_low_speed
+  val_ratio: 0.2
+experiment:
+  mode: sweep
+  name: regression_modetime_last_sched_modesoft
+  output_root: runs
+  output_sweep: sweeps_2
+  resources: resources.csv
+  seed: 42
+logging:
+  checkpoint_stem: test
+  init_from: scratch
+  model_dir: out
+model:
+  activation_function: gelu
+  bias: false
+  dropout: 0.05
+  n_embd: 32
+  n_head: 8
+  n_layer: 8
+plot:
+  dpi: 160
+  export_csv: true
+  fmt: pdf
+  logy: true
+  ma: 1
+  max_T: 501
+  min_T: 1000
+  output_subdir: plots
+  print: true
+  show: false
+scheduled_sampling:
+  decay_epochs: 5000
+  p0: 1.0
+  p_min: 0.0
+  sched_enabled: true
+  sched_mode: soft
+simulations:
+  downsample_factor: 10
+  dt: 0.01
+  fs: 100
+sweep:
+  regression_mode:
+  - time_last
+  - time_full
+  sched_mode:
+  - stochastic
+  - soft
+training:
+  R: 0.5
+  batch_size: 64
+  eval_interval: 1
+  eval_iters: 1
+  fixed_lr: false
+  loss: TimeWeightedMSE
+  loss_mode: exp
+  lr: 1.0e-05
+  max_iters: 10000
+  patience: 1000
+  regression_mode: time_last
+  smoothness: true
+  warmup_iters: 5000
+  weight_decay: 0.0

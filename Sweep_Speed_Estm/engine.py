@@ -110,7 +110,7 @@ def validate(           # to check the best model
     return running_loss / len(dataloader)
 
 
-def test(           # to check over/under-fitting
+def test(               # to check over/under-fitting
     model,
     dataset,
     device,
@@ -188,7 +188,7 @@ def test(           # to check over/under-fitting
     return test_loss, traj, (N, T)
 
 
-def _test(               # to check predicted trajectories
+def _test(              # to check predicted trajectories
         model,
         dataloader,
         device: torch.device,

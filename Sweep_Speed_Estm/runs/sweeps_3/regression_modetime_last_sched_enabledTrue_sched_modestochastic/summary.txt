@@ -1,0 +1,20 @@
+exp_name: regression_modetime_last_sched_enabledTrue_sched_modestochastic
+seed: 123
+
+best_val_loss: 5.169675e-04
+best_epoch: 8354
+test_loss: 5.747901e+03
+
+train_time: 13:33:51 (48831.299s)
+final_epoch: 9999
+epochs_ran: 10000
+
+device_type: cuda
+num_params: 99393
+
+artifacts:
+  - history.csv
+  - resources.csv
+  - config_used.yaml
+  - test_best.pt
+  - test_last.pt

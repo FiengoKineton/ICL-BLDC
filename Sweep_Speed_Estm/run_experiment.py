@@ -45,15 +45,19 @@ def write_progress_pdf(
     val    = np.array([r["val_loss"] for r in history], dtype=float)
     test   = np.array([r["test_loss"] for r in history], dtype=float)
 
+    p_curve = np.array([r.get("theacher_prob", np.nan) for r in history], dtype=float)
+    selection = np.array([r.get("actual_gt_ratio", np.nan) for r in history], dtype=float)
+
     best_idx = int(np.argmin(val))
     best_epoch = int(epochs[best_idx])
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=False)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(11, 10), sharex=False)
 
     # --- losses ---
     ax1.plot(epochs, train, label="train")
     ax1.plot(epochs, val,   label="val")
-    ax1.plot(epochs, test,  label="test")
+    if test.mean() < train.mean() * 10:
+        ax1.plot(epochs, test,  label="test")
     ax1.axvline(best_epoch, linestyle=":", linewidth=2, label=f"best val @ {best_epoch}")
 
     ax1.set_xlabel("Epoch")
@@ -64,22 +68,39 @@ def write_progress_pdf(
         ax1.set_yscale("log")
     ax1.set_title(f"{exp_name} | epoch={epoch} | best_val_epoch={best_epoch}")
 
+    # --- scheduled sampling ---
+    if not np.all(np.isnan(p_curve)):
+        ax2.plot(epochs, p_curve, color="tab:blue", linewidth=2, label="p (Target)")
+        # Filter out Nones for selection scatter
+        valid_mask = ~np.isnan(selection)
+        if np.any(valid_mask):
+            ax2.scatter(epochs[valid_mask], selection[valid_mask], 
+                        color="tab:orange", s=15, alpha=0.6, label="Actual GT Ratio")
+        
+        ax2.set_ylabel("Prob / Ratio")
+        ax2.set_ylim(-0.05, 1.05)
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(loc="upper right")
+        ax2.set_title("Scheduled Sampling Progress")
+    else:
+        ax2.text(0.5, 0.5, "Scheduled Sampling not active", ha="center", va="center")
+
     # --- prediction ---
     if y_true_1d is not None and y_pred_1d is not None:
         yt = np.asarray(y_true_1d).reshape(-1)
         yp = np.asarray(y_pred_1d).reshape(-1)
         n = min(len(yt), len(yp))
         x = np.arange(n)
-        ax2.plot(x, yt[:n], label="test y (true)")
-        ax2.plot(x, yp[:n], label="test y (pred)")
-        ax2.set_xlabel("Index (flattened)")
-        ax2.set_ylabel("Value")
-        ax2.grid(True, alpha=0.3)
-        ax2.legend(loc="best")
-        ax2.set_title("Test prediction (one representative batch/sequence)")
+        ax3.plot(x, yt[:n], label="test y (true)")
+        ax3.plot(x, yp[:n], label="test y (pred)")
+        ax3.set_xlabel("Index (flattened)")
+        ax3.set_ylabel("Value")
+        ax3.grid(True, alpha=0.3)
+        ax3.legend(loc="best")
+        ax3.set_title("Test prediction (one representative batch/sequence)")
     else:
-        ax2.text(0.5, 0.5, "No example available", ha="center", va="center")
-        ax2.axis("off")
+        ax3.text(0.5, 0.5, "No example available", ha="center", va="center")
+        ax3.axis("off")
 
     fig.tight_layout()
     fig.savefig(pdf_path, format="pdf")  # overwrite same file
@@ -326,19 +347,30 @@ def run_single_experiment(
         else:
             teacher_prob = 0.0
 
-        train_loss = train(model, train_dl, criterion, optimizer, device, R_smooth, regression_mode, teacher_prob, ss_mode)
+        train_loss, selection = train(model, train_dl, criterion, optimizer, device, R_smooth, regression_mode, teacher_prob, ss_mode)
         val_loss = validate(model, val_dl, criterion, device, R_smooth, regression_mode, teacher_prob, ss_mode)
-        test_loss, (_, _, y_ex, y_pred_ex), (N, T) = test(model, test_ds, device, cfg_data["seq_len"], dt) if (epoch % eval_interval) == 0 else np.nan
-        i = random.randint(0, N - 1)
+        test_loss, (_, _, y_ex, y_pred_ex), (N, T) = test(model, test_ds, device, cfg_data["seq_len"], dt) if (epoch % eval_interval) == 0 else (float("nan"), (None, None, None, None), (None, None))
 
         # Track
+        if selection is not None:
+            if isinstance(selection, torch.Tensor):
+                actual_ratio = selection.mean().item()  # Convert multi-element tensor to mean float
+            elif isinstance(selection, (list, np.ndarray)):
+                actual_ratio = np.mean(selection)       # Convert list/array to mean float
+            else:
+                actual_ratio = float(selection)         # It's already a single number
+        else:
+            actual_ratio = None
+
         row = {
             "epoch": epoch,
             "train_loss": float(train_loss),
             "val_loss": float(val_loss),
-            "test_loss": float(test_loss),
+            "test_loss": test_loss,
             "lr": float(lr_epoch),
             "best_val_loss_so_far": float(best_val_loss),
+            "theacher_prob": float(teacher_prob),
+            "actual_gt_ratio": actual_ratio,
         }
         history.append(row)
 
@@ -358,9 +390,11 @@ def run_single_experiment(
                 f.write(f"Patience Count & {no_improve}/{patience} \\\\ \n")
                 f.write(f"Device & {device_type} \\\\ \n")
                 f.write(f"Elapsed Time & {_format_seconds(time.time() - start_time)} \\\\ \n")
+                f.write(f"Scheduled Sampling p & {teacher_prob:.3f}, selection = {selection if selection is not None else 0.0} \\\\ \n")
                 f.write(r"\hline" + "\n")
                 f.write(r"\end{tabular}")
 
+            i = random.randint(0, N - 1)
             write_progress_pdf(
                 history=history,
                 epoch=epoch,
@@ -395,13 +429,12 @@ def run_single_experiment(
             else:
                 no_improve += 1
 
-        if (epoch % max(1, eval_interval)) == 0:
-            if print_flag: print(
-                f"[epoch {epoch}] "
-                f"train={train_loss:.4e} val={val_loss:.4e} test={test_loss:.4e} "
-                f"best={best_val_loss:.4e} (epoch={best_epoch}) "
-                f"lr={lr_epoch:.3e} no_improve={no_improve}/{patience}"
-            )
+        if print_flag: print(
+            f"[epoch {epoch}] "
+            f"train={train_loss:.4e} val={val_loss:.4e} test={test_loss:.4e} "
+            f"best={best_val_loss:.4e} (epoch={best_epoch}) "
+            f"lr={lr_epoch:.3e} no_improve={no_improve}/{patience}"
+        )
 
         if no_improve >= patience:
             if print_flag: print(f"[early-stop] epoch {epoch}, patience={patience}")

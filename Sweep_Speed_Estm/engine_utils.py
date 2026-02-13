@@ -167,9 +167,9 @@ def scheduled_sampling_inject(y_prev, yhat_prev, p: float, ss_mode: str):
       - "soft"       -> deterministic merge: p*y_prev + (1-p)*yhat_prev
     """
     if p <= 0.0:
-        return yhat_prev
+        return yhat_prev, 0.0
     if p >= 1.0:
-        return y_prev
+        return y_prev, 1.0
 
     # force (B,) for both
     y_prev = y_prev.view(-1)
@@ -177,10 +177,11 @@ def scheduled_sampling_inject(y_prev, yhat_prev, p: float, ss_mode: str):
 
     if ss_mode == "stochastic":
         use_gt = (torch.rand(y_prev.shape, device=y_prev.device) < p)  # (B,) bool mask
-        return torch.where(use_gt, y_prev, yhat_prev)
+        selection = use_gt.float()
+        return torch.where(use_gt, y_prev, yhat_prev), selection
 
     if ss_mode == "soft":
-        return p * y_prev + (1.0 - p) * yhat_prev
+        return p * y_prev + (1.0 - p) * yhat_prev, None
 
     raise ValueError(f"Unknown ss_mode: {ss_mode}")
 
@@ -216,13 +217,14 @@ def regression(
                 y_prev = batch_y[:, t-1, 0].view(-1)          # (B,)
                 yhat_prev = last_predictions.view(-1)         # (B,)
 
-                inject = scheduled_sampling_inject(
+                inject, selection = scheduled_sampling_inject(
                     y_prev=y_prev,
                     yhat_prev=yhat_prev,
                     p=teacher_prob,
                     ss_mode=ss_mode,                          # "stochastic" or "soft"
                 )
             else:
+                selection = None
                 inject = last_predictions.view(-1)
 
             batch_u_step[:, t, 4] = inject
@@ -241,7 +243,7 @@ def regression(
     else:
         batch_y_pred = model(batch_u_copy[:, :, :-1])
 
-    return batch_y_pred
+    return batch_y_pred, selection
 
 def smooth_dynamics_loss(
     y_true: torch.Tensor,

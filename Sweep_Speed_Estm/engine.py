@@ -41,7 +41,7 @@ def train(              # to check hyperparameters change
         batch_u, batch_y = batch_u.to(device), batch_y.to(device)
 
         optimizer.zero_grad()  # Clear previous gradients 
-        batch_y_pred = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode)
+        batch_y_pred, selection = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode)
         loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth, criterion=criterion)
 
         # Backpropagation
@@ -58,7 +58,7 @@ def train(              # to check hyperparameters change
             if param.grad is None:
                 print(f"Warning: No gradient computed for {name}")
 
-    return running_loss / len(dataloader)
+    return running_loss / len(dataloader), selection
 
 def validate(           # to check the best model
         model, 
@@ -86,7 +86,7 @@ def validate(           # to check the best model
             batch_u, batch_y = batch
             batch_u, batch_y = batch_u.to(device), batch_y.to(device)
 
-            batch_y_pred = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode)
+            batch_y_pred, _ = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode)
             """batch_y_pred = torch.zeros_like(batch_y)
         
             # create a copy of batch_u to work with, then overwrite the real velocity (symbolic, may not be needed for the code)
@@ -108,7 +108,6 @@ def validate(           # to check the best model
             running_loss += loss.item()
 
     return running_loss / len(dataloader)
-
 
 def test(               # to check over/under-fitting
     model,

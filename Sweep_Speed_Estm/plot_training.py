@@ -206,6 +206,12 @@ def build_losses_from_history(history: List[Dict[str, Any]]) -> Dict[str, np.nda
         lr_arr = np.asarray([row.get("lr", np.nan) for row in history], dtype=float)
         out["LR"] = lr_arr[:n]
 
+    if "teacher_prob" in history[0]:
+        out["teacher_prob"] = np.asarray([row.get("teacher_prob", np.nan) for row in history], dtype=float)[:n]
+    
+    if "actual_gt_ratio" in history[0]:
+        out["actual_gt_ratio"] = np.asarray([row.get("actual_gt_ratio", np.nan) for row in history], dtype=float)[:n]
+
     return out
 
 
@@ -381,6 +387,52 @@ def recommend_patience_from_val(
 # ---------------------------------------------------------------------
 # Plotting functions
 # ---------------------------------------------------------------------
+
+def plot_scheduled_sampling(
+    series: List[Tuple[str, Dict[str, np.ndarray]]],
+    outdir: Path,
+    dpi: int,
+    fmt: str,
+    prefix: str = "",
+) -> Path | None:
+    """Plots the teacher probability (p) and actual GT selection ratio."""
+    # Check if we have data to plot
+    data = series[0][1]
+    p_curve = data.get("teacher_prob", None)
+    ratio_curve = data.get("actual_gt_ratio", None)
+
+    # Only plot if p is not consistently 0.0
+    if p_curve is None or np.all(p_curve == 0.0):
+        return None
+
+    outdir.mkdir(parents=True, exist_ok=True)
+    fig, ax1 = plt.subplots(figsize=(10, 5))
+
+    epochs = np.arange(1, len(p_curve) + 1)
+
+    # Plot the Target Probability (p)
+    line1 = ax1.plot(epochs, p_curve, color="royalblue", linewidth=2, label="Teacher Prob (p)")
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Probability / Ratio")
+    ax1.set_ylim(-0.05, 1.05)
+    ax1.grid(True, alpha=0.2)
+
+    # Plot the Actual Selection Ratio if it exists
+    if ratio_curve is not None:
+        ax1.scatter(epochs, ratio_curve, color="orange", s=10, alpha=0.5, label="Actual GT Ratio")
+        # Add a moving average to the ratio to see the trend
+        if len(ratio_curve) > 5:
+            ma_ratio = moving_average(ratio_curve, w=5)
+            ax1.plot(epochs, ma_ratio, color="darkorange", linestyle="--", alpha=0.8, label="Actual Ratio (MA)")
+
+    ax1.set_title("Scheduled Sampling Schedule vs. Realization")
+    ax1.legend(loc="upper right")
+    
+    fig.tight_layout()
+    f = outdir / f"{prefix}_scheduled_sampling.{fmt}"
+    fig.savefig(f, dpi=dpi, format=fmt)
+    plt.close(fig)
+    return f
 
 
 def plot_losses(
@@ -997,6 +1049,17 @@ def run_training_plots(
           f"Number of parameters: {num_params}\n"
           f"Device type: {device_type}\n"
           f"Training time: {days:2d}d {hours:2d}h {minutes:2d}m {seconds:2d}s")
+
+
+    f_ss = plot_scheduled_sampling(
+        series, 
+        outdir, 
+        dpi=dpi, 
+        fmt=fmt, 
+        prefix=prefix
+    )
+    if f_ss is not None and print_flag:
+        print(f"  - {f_ss}")
 
 
 # ---------------------------------------------------------------------

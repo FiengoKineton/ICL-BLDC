@@ -46,7 +46,7 @@ training:
   weight_decay: 0.0
   eval_interval: 50
   eval_iters: 1
-  patience: 1000
+  patience: 1000                                    # inf as default
   fixed_lr: false        
   smoothness: true                                  # False as default
   R: 0.5                                            # regularization weight | to tune
@@ -55,7 +55,7 @@ training:
   loss_mode: "exp"                                  # for TimeWeightedMSE | "linear", "exp"
 
 scheduled_sampling:
-  sched_enabled: true
+  sched_enabled: true                               # False as default
   sched_mode: "stochastic"                          # "stochastic" or "soft"
   p0: 1.0                                           # initial teacher prob
   decay_epochs: 3000                                # epochs to decay to 0

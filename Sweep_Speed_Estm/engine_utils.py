@@ -193,6 +193,7 @@ def regression(
         batch_y: torch.Tensor | None = None,
         teacher_prob: float = 0.0,
         ss_mode: str = "stochastic",   # "stochastic" or "soft"
+        training: bool = False,
 ):
     # Create a copy of batch_u and zero the feedback channel
     batch_u_copy = batch_u.clone()
@@ -213,7 +214,7 @@ def regression(
 
             batch_u_step = batch_u_copy.clone()
 
-            if t > 0 and teacher_prob > 0.0 and batch_y is not None:
+            if t > 0 and teacher_prob > 0.0 and batch_y is not None and training:
                 y_prev = batch_y[:, t-1, 0].view(-1)          # (B,)
                 yhat_prev = last_predictions.view(-1)         # (B,)
 

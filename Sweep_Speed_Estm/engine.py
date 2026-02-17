@@ -41,7 +41,7 @@ def train(              # to check hyperparameters change
         batch_u, batch_y = batch_u.to(device), batch_y.to(device)
 
         optimizer.zero_grad()  # Clear previous gradients 
-        batch_y_pred, selection = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode)
+        batch_y_pred, selection = regression(batch_u, model, device, regression_mode, batch_y, teacher_prob, ss_mode, training=True)
         loss = criterion(batch_y, batch_y_pred) + smooth_dynamics_loss(batch_y, batch_y_pred, R_smooth, criterion=criterion)
 
         # Backpropagation

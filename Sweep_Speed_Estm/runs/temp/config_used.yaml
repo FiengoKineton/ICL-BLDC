@@ -48,6 +48,7 @@ plot:
   ma: 1
   max_T: 501
   min_T: 1000
+  n_exps: 10
   output_subdir: plots
   print: true
   show: false
@@ -139,7 +140,7 @@ training:
   loss: TimeWeightedMSE
   loss_mode: exp
   lr: 1.0e-05
-  max_iters: 3
+  max_iters: 5
   patience: 1000
   regression_mode: time_last
   smoothness: true

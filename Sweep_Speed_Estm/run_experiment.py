@@ -1,6 +1,7 @@
 # run_experiment.py     | SET (leave it as it is)
 
-import os, time, torch, json, torch.nn as nn, numpy as np, pandas as pd, matplotlib.pyplot as plt, random
+import os, time, torch, json, random
+import torch.nn as nn, numpy as np, pandas as pd, matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial
@@ -17,6 +18,10 @@ from resource_monitor import ResourceMonitor
 
 
 
+def _evaluate(epoch, I: int = 50, N: int = 1000) -> bool:
+    # Example: evaluate every 10 epochs
+    return (epoch % I) == 0 or epoch + 1 == N
+
 def _format_seconds(seconds: float) -> str:
     try:
         return str(timedelta(seconds=int(round(seconds))))
@@ -31,7 +36,7 @@ def write_progress_pdf(
     pdf_path,
     exp_name: str = "",
     log_loss: bool = True,
-):
+    ):
     """
     Overwrites a single PDF on disk each call.
     Top: loss curves + vertical dotted line at best val epoch so far.
@@ -89,15 +94,29 @@ def write_progress_pdf(
     if y_true_1d is not None and y_pred_1d is not None:
         yt = np.asarray(y_true_1d).reshape(-1)
         yp = np.asarray(y_pred_1d).reshape(-1)
+
         n = min(len(yt), len(yp))
         x = np.arange(n)
-        ax3.plot(x, yt[:n], label="test y (true)")
-        ax3.plot(x, yp[:n], label="test y (pred)")
+
+        yt = yt[:n]
+        yp = yp[:n]
+
+        err = yp - yt
+        mse = float(np.mean(err**2))
+        rmse = np.sqrt(mse)
+        mae = np.mean(np.abs(err))
+        mape = np.mean(np.abs(err) / (np.abs(yt) + 1e-12)) * 100
+
+        ax3.plot(x, yt, label="test y (true)")
+        ax3.plot(x, yp, label="test y (pred)")
+        ax3.plot(x, err, label=f"error (MSE={mse:.6g}), MAE={mae:.6g}, MAPE={mape:.2f}%)", linestyle="--")
+
         ax3.set_xlabel("Index (flattened)")
         ax3.set_ylabel("Value")
         ax3.grid(True, alpha=0.3)
         ax3.legend(loc="best")
         ax3.set_title("Test prediction (one representative batch/sequence)")
+
     else:
         ax3.text(0.5, 0.5, "No example available", ha="center", va="center")
         ax3.axis("off")
@@ -121,7 +140,7 @@ def save_run_summary(
     history_len: int,
     resources_csv_name: str,
     checkpoint_stem: str,
-) -> None:
+    ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     cfg_training = cfg.get("training", {})
@@ -206,6 +225,99 @@ def save_run_summary(
     with (run_dir / "summary.txt").open("w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
+def save_testing_results(
+    dir,
+    t_ex,
+    u_ex,
+    y_ex,
+    y_pred_ex,
+    N: int,
+    T: int,
+    k: int = 5,
+    filename: str = "test_results.npz",
+    seed: int | None = None,
+    ):
+    out_dir = Path(dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Ensure numpy arrays (handles torch tensors too) ---
+    def to_numpy(x):
+        if hasattr(x, "detach"):
+            x = x.detach()
+        if hasattr(x, "cpu"):
+            x = x.cpu()
+        if hasattr(x, "numpy"):
+            return x.numpy()
+        return np.asarray(x)
+
+    t_ex = to_numpy(t_ex).squeeze()
+    y_ex = to_numpy(y_ex).squeeze()
+    y_pred_ex = to_numpy(y_pred_ex).squeeze()
+    u_ex = to_numpy(u_ex)
+
+    NT = N * T
+    if t_ex.shape[0] != NT:
+        raise ValueError(f"t_ex length {t_ex.shape[0]} != N*T ({NT})")
+    if y_ex.shape[0] != NT:
+        raise ValueError(f"y_ex length {y_ex.shape[0]} != N*T ({NT})")
+    if y_pred_ex.shape[0] != NT:
+        raise ValueError(f"y_pred_ex length {y_pred_ex.shape[0]} != N*T ({NT})")
+
+    # --- Save as NPZ ---
+    npz_path = out_dir / filename
+    np.savez(
+        npz_path,
+        N=np.int64(N),
+        T=np.int64(T),
+        t=t_ex,
+        u=u_ex,
+        y_true=y_ex,
+        y_pred=y_pred_ex,
+    )
+
+    # --- Plot k random trajectories (each in its own figure, 2 subplots) ---
+    if seed is not None:
+        random.seed(seed)
+
+    k = min(k, N)
+    chosen = random.sample(range(N), k) if N >= k else [random.randint(0, N - 1) for _ in range(k)]
+
+    for j, i in enumerate(chosen):
+        sl = slice(i * T, (i + 1) * T)
+        t_1d = t_ex[sl]
+        y_true_1d = y_ex[sl]
+        y_pred_1d = y_pred_ex[sl]
+
+        err_1d = y_pred_1d - y_true_1d
+        mse = float(np.mean(err_1d ** 2))
+        mae = np.mean(np.abs(err_1d))
+        mape = np.mean(np.abs(err_1d) / (np.abs(y_true_1d) + 1e-12)) * 100
+        mape_str = f"={mape:.2f}%" if mape < 300 else f">300%"
+
+        fig, axes = plt.subplots(2, 1, sharex=True)
+        fig.suptitle(f"Test sample {i}  ({j+1}/{k})")
+
+        # Top: dynamics
+        axes[0].plot(t_1d, y_true_1d, label="y_true")
+        axes[0].plot(t_1d, y_pred_1d, label="y_pred")
+        axes[0].set_ylabel("y")
+        axes[0].legend()
+        axes[0].grid(True)
+
+        # Bottom: error + MSE in legend
+        axes[1].plot(t_1d, err_1d, label=f"error (MSE={mse:.6g}, MAE={mae:.6g}, MAPE{mape_str}")
+        axes[1].axhline(0.0, linewidth=1)
+        axes[1].set_xlabel("t")
+        axes[1].set_ylabel("y_pred - y_true")
+        axes[1].legend()
+        axes[1].grid(True)
+
+        fig.tight_layout()
+        fig.savefig(out_dir / f"pred_error_sample_{i}.pdf", dpi=150)
+
+    # plt.show()  # uncomment if you want figures to pop up when running as script
+    return str(npz_path)
+
 
 # Core function: trains one model, saves checkpoints + history.
 
@@ -216,7 +328,7 @@ def run_single_experiment(
     test_ds,
     run_dir: Path,
     exp_name: str,
-) -> float:
+    ) -> float:
     """
     Core function: trains one model, saves checkpoints + history.
 
@@ -232,6 +344,7 @@ def run_single_experiment(
     cfg_training = deepcopy(cfg["training"])
     cfg_compute = deepcopy(cfg["compute"])
     cfg_logging = deepcopy(cfg["logging"])
+    cfg_plot = deepcopy(cfg.get("plot", {}))
     ss_cfg = cfg.get("scheduled_sampling", {})
 
     # Slightly stupid thing: attach compile flag to model
@@ -326,10 +439,11 @@ def run_single_experiment(
     start_time = time.time()
 
     eval_interval = cfg_training.get("eval_interval", 50)
-    tex_filename = "run_ongoing.tex"
-    pdf_file = "run_ongoing_progress.pdf"
+    tex_filename = os.path.join(run_dir, "run_ongoing.tex")
+    pdf_file = os.path.join(run_dir, "run_ongoing_progress.pdf")
+    N_epochs = cfg_training["max_iters"]
 
-    for epoch in range(cfg_training["max_iters"]):
+    for epoch in range(N_epochs):
         # LR
         if cfg_training["decay_lr"]:
             lr_epoch = get_lr(epoch)
@@ -349,7 +463,7 @@ def run_single_experiment(
 
         train_loss, selection = train(model, train_dl, criterion, optimizer, device, R_smooth, regression_mode, teacher_prob, ss_mode)
         val_loss = validate(model, val_dl, criterion, device, R_smooth, regression_mode, teacher_prob, ss_mode)
-        test_loss, (_, _, y_ex, y_pred_ex), (N, T) = test(model, test_ds, device, cfg_data["seq_len"], dt) if (epoch % eval_interval) == 0 else (float("nan"), (None, None, None, None), (None, None))
+        test_loss, (t_ex, u_ex, y_ex, y_pred_ex), (N, T) = test(model, test_ds, device, cfg_data["seq_len"], dt) if _evaluate(epoch, eval_interval, N_epochs) else (float("nan"), (None, None, None, None), (None, None))
 
         # Track
         if selection is not None:
@@ -374,7 +488,7 @@ def run_single_experiment(
         }
         history.append(row)
 
-        if epoch % eval_interval == 0:
+        if _evaluate(epoch, eval_interval, N_epochs):
             with open(tex_filename, "w") as f:
                 f.write(r"\begin{tabular}{|l|l|}" + "\n")
                 f.write(r"\hline" + "\n")
@@ -440,10 +554,8 @@ def run_single_experiment(
             if print_flag: print(f"[early-stop] epoch {epoch}, patience={patience}")
             break
 
-    if os.path.exists(tex_filename):
-        os.remove(tex_filename)
-    if os.path.exists(pdf_file):
-        os.remove(pdf_file)
+    #if os.path.exists(tex_filename):    os.remove(tex_filename)
+    #if os.path.exists(pdf_file):        os.remove(pdf_file)
 
     # Final checkpoint (loss trajectory etc)
     train_time = time.time() - start_time
@@ -475,6 +587,21 @@ def run_single_experiment(
     import yaml
     with (run_dir / "config_used.yaml").open("w") as f:
         yaml.safe_dump(cfg, f)
+    
+    try: 
+        save_testing_results(
+            dir=run_dir/"plots"/"testing"/"test_fn",
+            t_ex=t_ex,
+            u_ex=u_ex,
+            y_ex=y_ex,
+            y_pred_ex=y_pred_ex,
+            N=N,
+            T=T,
+            k=cfg_plot.get("n_test_exps", 5),
+            seed=seed,
+        )
+    except Exception as e:
+        print(f"[warning] Could not save test results: {e}")
 
 
     test_loss = run_testing(
@@ -485,6 +612,7 @@ def run_single_experiment(
         model_dir=best_model,
         device=device,
         data_set=test_ds,
+        n_exps=cfg_plot.get("n_test_exps", 5),
     ) 
 
     run_training_plots(

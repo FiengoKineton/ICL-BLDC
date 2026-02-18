@@ -88,6 +88,7 @@ plot:
   fmt: "pdf"
   min_T: 1000                                       # 0 if you want to start from t=0
   max_T: 501                                        # None is you want to plot the entire lenght
+  n_exps: 10                                        # number of experiments to plot (only for test set)
 
 
 sweep:

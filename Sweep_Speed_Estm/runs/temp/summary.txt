@@ -1,13 +1,13 @@
 exp_name: temp
 seed: 123
 
-best_val_loss: 4.188414e-02
-best_epoch: 1
-test_loss: 1.909562e+05
+best_val_loss: 3.824238e-02
+best_epoch: 4
+test_loss: 1.858650e+05
 
-train_time: 0:01:04 (63.769s)
-final_epoch: 2
-epochs_ran: 3
+train_time: 0:01:23 (83.315s)
+final_epoch: 4
+epochs_ran: 5
 
 device_type: cuda
 num_params: 99393

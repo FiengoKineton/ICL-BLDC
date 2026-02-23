@@ -646,4 +646,5 @@ def run_single_experiment(
 
 
     print(f"\n\n[run] Done. best_val_loss={best_val_loss:.4e} at epoch {best_epoch} (time: {train_time})")
-    return float(best_val_loss), float(train_time), float(test_loss)
+    return float(best_val_loss), float(train_time), float(test_loss), int(num_params)
+

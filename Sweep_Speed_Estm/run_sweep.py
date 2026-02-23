@@ -211,7 +211,7 @@ class Sweeper:
         run_dir = self.root / run_name
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        best_val_loss, train_time_s, test_loss = self.run_single_experiment(
+        best_val_loss, train_time_s, test_loss, num_params = self.run_single_experiment(
             cfg_run,
             self.train_ds,
             self.val_ds,
@@ -225,6 +225,7 @@ class Sweeper:
             "best_val_loss": best_val_loss,
             "train_time_seconds": train_time_s,
             "test_loss": test_loss,
+            "num_params": num_params,
         }
         row.update(overrides)
         return row
@@ -329,11 +330,11 @@ class Sweeper:
                     raise optuna.TrialPruned()
 
             if pruning:
-                best_val_loss, train_time_s, test_loss = self.run_single_experiment(
+                best_val_loss, train_time_s, test_loss, num_params = self.run_single_experiment(
                     cfg_run, self.train_ds, self.val_ds, self.test_ds, run_dir, name, report_cb=report_cb
                 )
             else:
-                best_val_loss, train_time_s, test_loss = self.run_single_experiment(
+                best_val_loss, train_time_s, test_loss, num_params = self.run_single_experiment(
                     cfg_run, self.train_ds, self.val_ds, self.test_ds, run_dir, name
                 )
 
@@ -342,6 +343,7 @@ class Sweeper:
                 "best_val_loss": best_val_loss,
                 "train_time_seconds": train_time_s,
                 "test_loss": test_loss,
+                "num_params": num_params,
             }
             row.update(overrides)
             rows.append(row)
@@ -388,7 +390,7 @@ class Sweeper:
 
                 print(f"[sweep:sh] round={r} budget={budget} i={i} name={name}")
 
-                best_val_loss, train_time_s, test_loss = self.run_single_experiment(
+                best_val_loss, train_time_s, test_loss, num_params = self.run_single_experiment(
                     cfg_run, self.train_ds, self.val_ds, self.test_ds, run_dir, name
                 )
 
@@ -400,6 +402,7 @@ class Sweeper:
                     "best_val_loss": best_val_loss,
                     "train_time_seconds": train_time_s,
                     "test_loss": test_loss,
+                    "num_params": num_params,
                 }
                 row.update(overrides)
                 rows.append(row)

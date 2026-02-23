@@ -27,8 +27,8 @@ def run_single(cfg: Dict[str, Any]):
     root = Path(cfg["experiment"]["output_root"])
     run_dir = root / exp_name
 
-    best_val, train_time, test_loss = run_single_experiment(cfg, train_ds, val_ds, test_ds, run_dir, exp_name)
-    print(f"[main] Single run finished, best_val_loss={best_val:.4e}, test_loss={test_loss:.4e}, train_time={train_time:.2f}s\n")
+    best_val, train_time, test_loss, num_params = run_single_experiment(cfg, train_ds, val_ds, test_ds, run_dir, exp_name)
+    print(f"[main] Single run finished, best_val_loss={best_val:.4e}, test_loss={test_loss:.4e}, train_time={train_time:.2f}s, num_params={num_params}\n")
 
 
 

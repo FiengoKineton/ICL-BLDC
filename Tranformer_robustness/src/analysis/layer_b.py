@@ -9,7 +9,12 @@ import torch.nn as nn
 from src.blocks.model import DecoderOnlyCausalTransformer, GPTConfig
 from src.blocks.optim import build_optimizer, OptimConfig
 from src.blocks.train import fit
-from src.analysis.layer_a import LayerAConfig, robustness_to_input_noise, closed_loop_gain_proxy_worstcase
+from src.analysis.layer_a import (
+    LayerAConfig,
+    robustness_to_input_noise,
+    closed_loop_gain_proxy_worstcase,
+    closed_loop_amplification_worstcase,
+)
 
 @dataclass
 class LayerBConfig:
@@ -69,6 +74,7 @@ def train_and_score_inputset(
 
     rob = robustness_to_input_noise(model, u0, cfg=a_cfg, trials=20)
     wc = closed_loop_gain_proxy_worstcase(model, u0, cfg=a_cfg, t_start=1, b=0)
+    wc_ampl = closed_loop_amplification_worstcase(model, u0, cfg=a_cfg, t_start=1, b=0)
     
     return {
         "final_train_loss": float(hist["train_loss"][-1]),
@@ -76,4 +82,6 @@ def train_and_score_inputset(
         "robust_mean_abs_output_change": rob["mean_abs_output_change"],
         "closed_loop_gain_proxy_worst": wc["gain_worst"],
         "t_worst": wc["t_worst"],
+        "closed_loop_amplification_worst [G_worst]": wc_ampl["G_worst"],
+        "closed_loop_amplification_worst [t_worst]": wc_ampl["t_worst"],
     }

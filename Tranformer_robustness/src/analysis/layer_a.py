@@ -1,8 +1,8 @@
 # src/analysis/layer_a.py
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, Optional, List
-import torch
+from typing import Dict
+import torch, math
 import torch.nn as nn
 
 from src.blocks.ar import ar_rollout
@@ -121,3 +121,56 @@ def closed_loop_gain_proxy(
         return y_full[:, -1, 0].squeeze()  # scalar
 
     return _finite_diff_scalar_sensitivity(f, y_prev, cfg.eps)
+
+
+@torch.no_grad()
+def closed_loop_amplification_worstcase(
+    model: nn.Module,
+    batch_u: torch.Tensor,
+    *,
+    cfg: LayerAConfig,
+    t_start: int = 1,
+    t_end: int | None = None,
+    b: int = 0,
+    clamp_min: float = 1e-6,
+) -> dict:
+    """
+    Computes:
+      g_t = |∂ yhat_t / ∂ yhat_{t-1}|  (finite-diff proxy)
+      G_t = Π_{k=1..t} g_k
+      G_max = max_t G_t
+
+    Returns:
+      - G_worst: worst-case cumulative amplification
+      - t_worst: time where it occurs
+      - g_list: list of (t, g_t)
+      - G_list: list of (t, G_t)
+    """
+    assert batch_u.ndim == 3
+    T = batch_u.shape[1]
+    if t_end is None:
+        t_end = T
+
+    # 1) local gains g_t
+    g_list: list[tuple[int, float]] = []
+    for t in range(t_start, min(t_end, T)):
+        g = closed_loop_gain_proxy(model, batch_u, cfg=cfg, t=t, b=b)
+        g_list.append((t, float(g)))
+
+    if not g_list:
+        return {"G_worst": 0.0, "t_worst": None, "g_list": [], "G_list": []}
+
+    # 2) cumulative products in log-space
+    logG = 0.0
+    G_list: list[tuple[int, float]] = []
+    best_t, best_G = None, -float("inf")
+
+    for t, g in g_list:
+        g_safe = max(g, clamp_min)               # avoid log(0)
+        logG += math.log(g_safe)
+        G = float(math.exp(logG))
+        G_list.append((t, G))
+        if G > best_G:
+            best_G, best_t = G, t
+
+    return {"G_worst": best_G, "t_worst": best_t, "g_list": g_list, "G_list": G_list}

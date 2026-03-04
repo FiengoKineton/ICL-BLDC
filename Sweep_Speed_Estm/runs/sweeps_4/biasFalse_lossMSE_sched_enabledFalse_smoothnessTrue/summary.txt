@@ -1,0 +1,20 @@
+exp_name: biasFalse_lossMSE_sched_enabledFalse_smoothnessTrue
+seed: 123
+
+best_val_loss: 8.563871e-04
+best_epoch: 7773
+test_loss: 2.201450e+04
+
+train_time: 10:56:24 (39383.716s)
+final_epoch: 8773
+epochs_ran: 8774
+
+device_type: cuda
+num_params: 99393
+
+artifacts:
+  - history.csv
+  - resources.csv
+  - config_used.yaml
+  - test_best.pt
+  - test_last.pt

@@ -1,0 +1,116 @@
+compute:
+  compile: false
+  cuda_device: cuda:0
+  no_cuda: false
+  threads: 16
+data:
+  data_subdir: data
+  folders:
+  - simulated/50_percent_low_speed
+  nu: 5
+  nx: 4
+  ny: 1
+  project_root_marker: Sweep_Speed_Estm
+  seq_len: 10
+  split_seed: 42
+  test__folders:
+  - true/CL_experiments_double_sensor/inertia07_ki-0.0061-kp-11.8427
+  test_ratio: 0.1
+  train__folders:
+  - simulated/50_percent_low_speed
+  train_ratio: 0.7
+  val__folders:
+  - simulated/50_percent_low_speed
+  val_ratio: 0.2
+experiment:
+  mode: sweep
+  name: biasTrue_lossMSE_sched_enabledTrue_smoothnessTrue
+  output_root: runs
+  output_sweep: sweeps_4
+  resources: resources.csv
+  seed: 123
+logging:
+  checkpoint_stem: test
+  init_from: scratch
+  model_dir: out
+model:
+  activation_function: gelu
+  bias: true
+  dropout: 0.05
+  n_embd: 32
+  n_head: 8
+  n_layer: 8
+plot:
+  dpi: 160
+  export_csv: true
+  fmt: pdf
+  logy: true
+  ma: 1
+  max_T: 501
+  min_T: 1000
+  n_exps: 10
+  output_subdir: plots
+  print: true
+  show: false
+scheduled_sampling:
+  decay_epochs: 3000
+  p0: 1.0
+  p_min: 0.0
+  sched_enabled: true
+  sched_mode: stochastic
+simulations:
+  downsample_factor: 10
+  dt: 0.01
+  fs: 100
+sweep:
+  budget_key: training.max_epochs
+  budgets:
+  - 5
+  - 15
+  - 50
+  distributions:
+    dropout:
+      high: 0.3
+      low: 0.0
+      type: uniform
+    lr:
+      high: 3e-3
+      low: 1e-5
+      type: loguniform
+    weight_decay:
+      high: 1e-2
+      low: 1e-6
+      type: loguniform
+  eta: 3
+  n_trials: 50
+  params:
+    bias:
+    - true
+    - false
+    loss:
+    - MSE
+    - TimeWeightedMSE
+    sched_enabled:
+    - true
+    smoothness:
+    - true
+    - false
+  path: sweep_results.csv
+  pruning: false
+  seed: 123
+  type: grid
+training:
+  R: 0.5
+  batch_size: 64
+  eval_interval: 50
+  eval_iters: 1
+  fixed_lr: false
+  loss: MSE
+  loss_mode: exp
+  lr: 1.0e-05
+  max_iters: 10000
+  patience: 1000
+  regression_mode: time_last
+  smoothness: true
+  warmup_iters: 5000
+  weight_decay: 0.0

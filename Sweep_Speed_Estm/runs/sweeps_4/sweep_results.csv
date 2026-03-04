@@ -1,0 +1,5 @@
+best_val_loss,bias,loss,run,sched_enabled,smoothness,test_loss,train_time_seconds
+0.0007940210198285058,True,MSE,biasTrue_lossMSE_sched_enabledTrue_smoothnessFalse,True,False,29692.78671875,41251.41250991821
+0.0005672355327988043,True,TimeWeightedMSE,biasTrue_lossTimeWeightedMSE_sched_enabledTrue_smoothnessFalse,True,False,22572.71640625,36806.444368839264
+0.0007824540516594425,False,MSE,biasFalse_lossMSE_sched_enabledTrue_smoothnessFalse,True,False,31919.671875,39884.20843696594
+0.0005035365938965697,False,TimeWeightedMSE,biasFalse_lossTimeWeightedMSE_sched_enabledTrue_smoothnessFalse,True,False,25576.578125,40475.14406847954
